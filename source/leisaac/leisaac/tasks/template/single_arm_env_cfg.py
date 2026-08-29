@@ -4,6 +4,10 @@ from typing import Any
 import isaaclab.sim as sim_utils
 import torch
 from isaaclab.assets import ArticulationCfg, AssetBaseCfg
+from isaaclab.devices.device_base import DevicesCfg
+from isaaclab.devices.openxr.openxr_device import OpenXRDevice, OpenXRDeviceCfg
+from isaaclab.devices.openxr.retargeters.manipulator.gripper_retargeter import GripperRetargeterCfg
+from isaaclab.devices.openxr.retargeters.manipulator.se3_rel_retargeter import Se3RelRetargeterCfg
 from isaaclab.envs import ManagerBasedRLEnvCfg
 from isaaclab.envs.mdp.recorders.recorders_cfg import (
     ActionStateRecorderManagerCfg as RecordTerm,
@@ -17,6 +21,7 @@ from isaaclab.scene import InteractiveSceneCfg
 from isaaclab.sensors import FrameTransformerCfg, OffsetCfg, TiledCameraCfg
 from isaaclab.utils import configclass
 from isaaclab.utils.datasets.episode_data import EpisodeData
+from leisaac.assets.robots.openarm import OPENARM_FEATURE_JOINT_NAMES
 from leisaac.assets.robots.lerobot import SO101_FOLLOWER_CFG
 from leisaac.devices.action_process import init_action_cfg, preprocess_device_action
 from leisaac.enhance.datasets.lerobot_dataset_handler import LeRobotDatasetCfg
@@ -189,12 +194,43 @@ class SingleArmTaskEnvCfg(ManagerBasedRLEnvCfg):
 
         self.scene.ee_frame.visualizer_cfg.markers["frame"].scale = (0.05, 0.05, 0.05)
 
-        self.default_feature_joint_names = [f"{joint_name}.pos" for joint_name in SINGLE_ARM_JOINT_NAMES]
+        if self.robot_name.startswith("openarm"):
+            self.default_feature_joint_names = list(OPENARM_FEATURE_JOINT_NAMES)
+        else:
+            self.default_feature_joint_names = [f"{joint_name}.pos" for joint_name in SINGLE_ARM_JOINT_NAMES]
+
+        self.teleop_devices = DevicesCfg(
+            devices={
+                "handtracking": OpenXRDeviceCfg(
+                    retargeters=[
+                        Se3RelRetargeterCfg(
+                            bound_hand=OpenXRDevice.TrackingTarget.HAND_RIGHT,
+                            # Stable starting point for the SO-101's compact workspace:
+                            # reduce the upstream 10x delta amplification and use the
+                            # wrist pose, which is less affected by pinch/finger motion.
+                            use_wrist_rotation=True,
+                            use_wrist_position=True,
+                            delta_pos_scale_factor=4.0,
+                            delta_rot_scale_factor=2.0,
+                            alpha_pos=0.35,
+                            alpha_rot=0.25,
+                            sim_device=self.sim.device,
+                        ),
+                        GripperRetargeterCfg(
+                            bound_hand=OpenXRDevice.TrackingTarget.HAND_RIGHT,
+                            sim_device=self.sim.device,
+                        ),
+                    ],
+                    sim_device=self.sim.device,
+                    xr_cfg=self.xr,
+                ),
+            }
+        )
 
     def use_teleop_device(self, teleop_device) -> None:
         self.task_type = teleop_device
-        self.actions = init_action_cfg(self.actions, device=teleop_device)
-        if teleop_device in ["keyboard", "gamepad", "so101_state_machine"]:
+        self.actions = init_action_cfg(self.actions, device=teleop_device, robot_name=self.robot_name)
+        if teleop_device in ["keyboard", "gamepad", "so101_state_machine", "handtracking", "quest3-controller"]:
             self.scene.robot.spawn.rigid_props.disable_gravity = True
 
     def preprocess_device_action(self, action: dict[str, Any], teleop_device) -> torch.Tensor:
@@ -203,13 +239,19 @@ class SingleArmTaskEnvCfg(ManagerBasedRLEnvCfg):
     def build_lerobot_frame(self, episode_data: EpisodeData, dataset_cfg: LeRobotDatasetCfg) -> dict:
         obs_data = episode_data._data["obs"]
         action = episode_data._data["actions"][-1]
-        if dataset_cfg.action_align:
+        is_openarm = self.robot_name.startswith("openarm")
+        if dataset_cfg.action_align and not is_openarm:
             processed_action = convert_leisaac_action_to_lerobot(action.unsqueeze(0)).squeeze(0)
         else:
             processed_action = action.cpu().numpy()
+        joint_pos = obs_data["joint_pos"][-1].unsqueeze(0)
+        if is_openarm:
+            processed_state = joint_pos.cpu().numpy().squeeze(0)
+        else:
+            processed_state = convert_leisaac_action_to_lerobot(joint_pos).squeeze(0)
         frame = {
             "action": processed_action,
-            "observation.state": convert_leisaac_action_to_lerobot(obs_data["joint_pos"][-1].unsqueeze(0)).squeeze(0),
+            "observation.state": processed_state,
             "task": self.task_description,
         }
         for frame_key in dataset_cfg.features.keys():

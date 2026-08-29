@@ -23,7 +23,7 @@ python scripts/environments/teleoperation/teleop_se3_agent.py \
 
 - `--seed`: Specify the seed for environment, e.g., `42`.
 
-- `--teleop_device`: Specify the teleoperation device type, e.g., `so101leader`, `bi-so101leader`, `keyboard`, `gamepad`, `lekiwi-leader`, `lekiwi-keyboard`, `lekiwi-gamepad`.
+- `--teleop_device`: Specify the teleoperation device type, e.g., `so101leader`, `bi-so101leader`, `keyboard`, `gamepad`, `lekiwi-leader`, `lekiwi-keyboard`, `lekiwi-gamepad`, `handtracking`, or `quest3-controller`.
 
 -  `--port`: Specify the port of teleoperation device, e.g., `/dev/ttyACM0`. Only used when teleop_device is `so101leader` and `lekiwi-leader`.
 
@@ -60,6 +60,104 @@ python scripts/environments/teleoperation/teleop_se3_agent.py \
 ::::tip
 We support multiple devices for teleoperation. See [here](/resources/available_devices) for more devices and usage instructions.
 ::::
+
+## Quest 3 Controller Teleoperation
+
+Use the Quest 3 Touch Plus controllers with the OpenXR runtime already used for hand tracking:
+
+```shell
+python scripts/environments/teleoperation/teleop_se3_agent.py \
+    --task=LeIsaac-SO101-PickOrange-v0 \
+    --teleop_device=quest3-controller \
+    --num_envs=1 \
+    --device=cuda
+```
+
+The script enables XR automatically and removes camera configurations that conflict with XR rendering. Controller mode
+starts enabled; hold the right squeeze before moving the controller. Add `--xr_start_paused` if you prefer to start it
+with Left X or an external OpenXR `START` command.
+
+- **Left X:** pause or resume teleoperation.
+- **Left Y:** reset the environment.
+- **Right squeeze:** hold as a clutch; the robot arm moves only while this is held.
+- **Right controller grip pose:** relative end-effector motion.
+- **Right trigger:** close the gripper at 65% pull and reopen it below 35% pull.
+
+The initial scales are position `4.0`, rotation `2.0`, with smoothing and a small deadband.  If the robot still feels
+too fast, lower the existing `--sensitivity` argument, for example `--sensitivity=0.6`.
+
+## Quest 3 Hand Tracking
+
+For `--teleop_device=handtracking`, do not hold the Touch Plus controllers. Quest exposes either the controller
+interaction profile or the hand-joint profile in the active OpenXR session. Put the controllers down or turn them off,
+show your right hand to the headset, and wait for the `Quest 3 hand joints detected` message before moving. The script
+waits for `wrist`, `thumb_tip`, and `index_tip` and captures the first hand frame as a zero-motion baseline.
+
+## OpenArm v1.0 LiftCube
+
+The OpenArm variant uses Isaac Lab's Isaac Sim 5.1 unimanual USD and stiff-PD
+actuators. It is registered separately, so existing SO-101 datasets and tasks
+remain unchanged. The OpenArm action is relative 6-DoF end-effector motion
+through `openarm_hand` plus a two-finger binary gripper (`0.044` open,
+`0.0` closed):
+
+```shell
+python scripts/environments/teleoperation/teleop_se3_agent.py \
+    --task=LeIsaac-OpenArm-LiftCube-v0 \
+    --teleop_device=quest3-controller \
+    --num_envs=1 \
+    --device=cuda
+```
+
+For bare-hand control, change `--teleop_device` to `handtracking` and put the
+Touch Plus controllers down. When using the local CloudXR 6.2.1 runtime, start
+the service in a separate terminal first:
+
+```shell
+XDG_RUNTIME_DIR=/run/user/1000 \
+NV_DEVICE_PROFILE=auto-webrtc \
+XR_RUNTIME_JSON=/home/lab/cloudxr6/openxr_cloudxr.json \
+LD_LIBRARY_PATH=/home/lab/cloudxr6:$LD_LIBRARY_PATH \
+python3 /home/lab/cloudxr6/cloudxr_service.py
+```
+
+Then run the LeIsaac command above with the same four environment variables.
+The service must report `CloudXR 6.2.1 Service running` before Isaac Sim starts.
+
+For example, the complete controller launch is:
+
+```shell
+XDG_RUNTIME_DIR=/run/user/1000 \
+NV_DEVICE_PROFILE=auto-webrtc \
+XR_RUNTIME_JSON=/home/lab/cloudxr6/openxr_cloudxr.json \
+LD_LIBRARY_PATH=/home/lab/cloudxr6:$LD_LIBRARY_PATH \
+/home/lab/env_leisaac/bin/python -u scripts/environments/teleoperation/teleop_se3_agent.py \
+    --task=LeIsaac-OpenArm-LiftCube-v0 \
+    --teleop_device=quest3-controller \
+    --num_envs=1 --device=cuda
+```
+
+### Bimanual OpenArm
+
+The bimanual environment uses the official OpenArm v1.0 torso, both 7-DoF arms,
+and both parallel grippers. Its action is 14D: left relative pose (6) + left
+gripper (1), followed by the matching seven values for the right arm.
+
+```shell
+XDG_RUNTIME_DIR=/run/user/1000 \
+NV_DEVICE_PROFILE=auto-webrtc \
+XR_RUNTIME_JSON=/home/lab/cloudxr6/openxr_cloudxr.json \
+LD_LIBRARY_PATH=/home/lab/cloudxr6:$LD_LIBRARY_PATH \
+/home/lab/env_leisaac/bin/python -u scripts/environments/teleoperation/teleop_se3_agent.py \
+    --task=LeIsaac-OpenArm-Bimanual-LiftCube-v0 \
+    --teleop_device=quest3-controller \
+    --num_envs=1 --device=cuda --headless --sensitivity=0.6
+```
+
+The left controller drives the left arm and the right controller drives the
+right arm. Hold the matching squeeze to move an arm and use the matching
+trigger for its gripper. For bare-hand control, replace the device with
+`handtracking` and make sure both hands are visible before moving.
 
 ## Remote Teleoperation
 

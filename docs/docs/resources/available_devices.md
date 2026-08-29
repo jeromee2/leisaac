@@ -53,6 +53,32 @@ Similar to the keyboard controls, the gamepad also commands the target frame (gr
 | press `LB` / press `LT`              | Rotate (pitch) up/down, aligned with the green arrows in the rotation diagram |
 | press `RT` / press `RB`              | Gripper open/close                                                            |
 
+### Quest 3 Controller
+
+Run with `--teleop_device=quest3-controller` to use Meta Quest 3 Touch Plus controllers through OpenXR. The script
+enables XR automatically and starts controller teleoperation enabled; the right squeeze remains a motion clutch. Use
+`--xr_start_paused` to wait for Left X or an external OpenXR `START` command. The right controller drives relative
+end-effector motion, while the left controller handles the session controls.
+
+For `LeIsaac-OpenArm-Bimanual-LiftCube-v0`, both controllers drive their matching arms. Each squeeze is an independent
+clutch and each trigger controls the matching gripper; Left X and Y keep their pause/reset functions.
+
+| controller input | description |
+| :--------------: | :---------- |
+| Left `X` | Pause or resume teleoperation |
+| Left `Y` | Reset the environment |
+| Right squeeze | Hold as a clutch; the arm moves only while held |
+| Right grip pose | Move the end effector relatively |
+| Right trigger | Close at 65% pull; reopen below 35% pull |
+
+### Quest 3 Hand Tracking
+
+Run with `--teleop_device=handtracking` for bare-hand control. Quest/OpenXR uses one interaction profile at a time:
+when the log reports `meta/touch_plus_controller`, only controller poses are available, not hand joints. Put both Touch
+Plus controllers down or turn them off, expose your right hand to the headset, and wait for the script to report that it
+captured a zero-motion baseline. The script pauses control until it can see `wrist`, `thumb_tip`, and `index_tip`.
+The bimanual OpenArm environment requires those joints on both hands and emits a 14D left-then-right action.
+
 ## Bi-Arm SO101 Follower
 
 Because keyboard control becomes complicated for dual arms, the Bi-Arm SO101 Follower in simulation currently supports only the Bi-SO101 Leader.

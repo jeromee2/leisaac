@@ -30,6 +30,8 @@ parser.add_argument(
         "lekiwi-keyboard",
         "lekiwi-gamepad",
         "lekiwi-leader",
+        "handtracking",
+        "quest3-controller",
     ],
     help="Device for interacting with environment",
 )
@@ -60,6 +62,11 @@ parser.add_argument(
 parser.add_argument("--task", type=str, default=None, help="Name of the task.")
 parser.add_argument("--seed", type=int, default=None, help="Seed for the environment.")
 parser.add_argument("--sensitivity", type=float, default=1.0, help="Sensitivity factor.")
+parser.add_argument(
+    "--xr_start_paused",
+    action="store_true",
+    help="Start XR teleoperation paused until a START command or the Quest 3 Left X button resumes it.",
+)
 
 # recorder_parameter
 parser.add_argument("--record", action="store_true", help="whether to enable record function")
@@ -84,6 +91,8 @@ AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
 
 app_launcher_args = vars(args_cli)
+if args_cli.teleop_device in {"handtracking", "quest3-controller"}:
+    app_launcher_args["xr"] = True
 
 # launch omniverse app
 app_launcher = AppLauncher(app_launcher_args)
@@ -94,6 +103,8 @@ import time
 
 import gymnasium as gym
 import torch
+from isaaclab.devices.openxr import remove_camera_configs
+from isaaclab.devices.teleop_device_factory import create_teleop_device
 from isaaclab.envs import DirectRLEnv, ManagerBasedRLEnv
 from isaaclab.managers import DatasetExportMode, TerminationTermCfg
 from isaaclab_tasks.utils import parse_env_cfg
@@ -160,14 +171,28 @@ def main():  # noqa: C901
     env_cfg.use_teleop_device(args_cli.teleop_device)
     env_cfg.seed = args_cli.seed if args_cli.seed is not None else int(time.time())
     task_name = args_cli.task
+    is_openarm_bimanual = getattr(env_cfg, "robot_name", "").startswith("openarm_bimanual")
+
+    if args_cli.xr:
+        env_cfg = remove_camera_configs(env_cfg)
+        for event_name in dir(env_cfg.events):
+            event_cfg = getattr(env_cfg.events, event_name)
+            asset_cfg = getattr(event_cfg, "params", {}).get("asset_cfg") if event_cfg else None
+            if asset_cfg and not hasattr(env_cfg.scene, asset_cfg.name):
+                setattr(env_cfg.events, event_name, None)
 
     if args_cli.quality:
         env_cfg.sim.render.antialiasing_mode = "FXAA"
         env_cfg.sim.render.rendering_mode = "quality"
 
     # precheck task and teleop device
-    if "BiArm" in task_name:
-        assert args_cli.teleop_device == "bi-so101leader", "only support bi-so101leader for bi-arm task"
+    if "BiArm" in task_name or "Bimanual" in task_name:
+        allowed_bimanual_devices = (
+            {"handtracking", "quest3-controller"} if is_openarm_bimanual else {"bi-so101leader"}
+        )
+        assert args_cli.teleop_device in allowed_bimanual_devices, (
+            f"supported devices for this bimanual task: {sorted(allowed_bimanual_devices)}"
+        )
     if "LeKiwi" in task_name:
         assert args_cli.teleop_device in [
             "lekiwi-leader",
@@ -245,8 +270,71 @@ def main():  # noqa: C901
             env.recorder_manager.flush_steps = 100
             env.recorder_manager.compression = "lzf"
 
+    # add teleoperation key for env reset
+    should_reset_recording_instance = False
+
+    def reset_recording_instance():
+        nonlocal should_reset_recording_instance
+        should_reset_recording_instance = True
+
+    # add teleoperation key for task success
+    should_reset_task_success = False
+
+    def reset_task_success():
+        nonlocal should_reset_task_success
+        should_reset_task_success = True
+        reset_recording_instance()
+
+    xr_teleop_devices = {"handtracking", "quest3-controller"}
+    # The CloudXR client does not always emit the optional ``teleop_command``
+    # START event. Start XR devices by default; their first valid pose is
+    # still used as a zero-motion baseline. Use --xr_start_paused to wait for
+    # an explicit start command instead.
+    teleoperation_active = not (args_cli.teleop_device in xr_teleop_devices and args_cli.xr_start_paused)
+
+    def start_teleoperation():
+        nonlocal teleoperation_active
+        teleoperation_active = True
+
+    def stop_teleoperation():
+        nonlocal teleoperation_active
+        teleoperation_active = False
+
     # create controller
-    if args_cli.teleop_device == "keyboard":
+    if args_cli.teleop_device == "handtracking":
+        print(
+            "Quest 3 hand tracking is active. Put the Touch Plus controllers down and use bare hands; "
+            "hand joints are unavailable while OpenXR binds the controller profile."
+        )
+        teleop_callbacks = {
+            "START": start_teleoperation,
+            "STOP": stop_teleoperation,
+            "RESET": reset_recording_instance,
+        }
+        teleop_interface = create_teleop_device(
+            args_cli.teleop_device, env_cfg.teleop_devices.devices, teleop_callbacks
+        )
+    elif args_cli.teleop_device == "quest3-controller":
+        from leisaac.devices import Quest3Controller
+
+        teleop_callbacks = {
+            "START": start_teleoperation,
+            "STOP": stop_teleoperation,
+            "RESET": reset_recording_instance,
+        }
+        teleop_interface = Quest3Controller(
+            sim_device=env.device,
+            callbacks=teleop_callbacks,
+            xr_cfg=env_cfg.xr,
+            sensitivity=args_cli.sensitivity,
+            delta_pos_scale_factor=20.0 if is_openarm_bimanual else 4.0,
+            delta_rot_scale_factor=10.0 if is_openarm_bimanual else 2.0,
+            rotation_threshold=0.001 if is_openarm_bimanual else 0.01,
+            zero_out_xy_rotation=not getattr(env_cfg, "robot_name", "").startswith("openarm"),
+            start_active=teleoperation_active,
+            bimanual=is_openarm_bimanual,
+        )
+    elif args_cli.teleop_device == "keyboard":
         from leisaac.devices import SO101Keyboard
 
         teleop_interface = SO101Keyboard(env, sensitivity=args_cli.sensitivity)
@@ -284,27 +372,51 @@ def main():  # noqa: C901
     else:
         raise ValueError(
             f"Invalid device interface '{args_cli.teleop_device}'. Supported: 'keyboard', 'gamepad', 'so101leader',"
-            " 'bi-so101leader', 'lekiwi-keyboard', 'lekiwi-leader', 'lekiwi-gamepad'."
+            " 'bi-so101leader', 'lekiwi-keyboard', 'lekiwi-leader', 'lekiwi-gamepad', 'handtracking',"
+            " 'quest3-controller'."
         )
 
-    # add teleoperation key for env reset
-    should_reset_recording_instance = False
+    if args_cli.teleop_device not in xr_teleop_devices:
+        teleop_interface.add_callback("R", reset_recording_instance)
+        teleop_interface.add_callback("N", reset_task_success)
+    if hasattr(teleop_interface, "display_controls"):
+        teleop_interface.display_controls()
 
-    def reset_recording_instance():
-        nonlocal should_reset_recording_instance
-        should_reset_recording_instance = True
+    hand_tracking_required_joints = {"wrist", "thumb_tip", "index_tip"}
+    hand_tracking_required_pose_flags = None
+    hand_tracking_primed = args_cli.teleop_device != "handtracking"
+    hand_tracking_waiting_reported = False
+    xr_core = None
+    if args_cli.teleop_device == "handtracking":
+        from omni.kit.xr.core import XRCore, XRPoseValidityFlags
 
-    # add teleoperation key for task success
-    should_reset_task_success = False
+        xr_core = XRCore.get_singleton()
+        hand_tracking_required_pose_flags = XRPoseValidityFlags.POSITION_VALID | XRPoseValidityFlags.ORIENTATION_VALID
 
-    def reset_task_success():
-        nonlocal should_reset_task_success
-        should_reset_task_success = True
-        reset_recording_instance()
+    def hand_tracking_is_ready() -> bool:
+        """Return whether the active OpenXR profile exposes the joints used by the retargeters."""
+        if xr_core is None:
+            return False
+        try:
+            hand_paths = ["/user/hand/right"]
+            if is_openarm_bimanual:
+                hand_paths.insert(0, "/user/hand/left")
+            for hand_path in hand_paths:
+                hand = xr_core.get_input_device(hand_path)
+                if hand is None:
+                    return False
+                poses = hand.get_all_virtual_world_poses()
+                if not all(
+                    joint_name in poses
+                    and (poses[joint_name].validity_flags & hand_tracking_required_pose_flags)
+                    == hand_tracking_required_pose_flags
+                    for joint_name in hand_tracking_required_joints
+                ):
+                    return False
+            return True
+        except Exception:
+            return False
 
-    teleop_interface.add_callback("R", reset_recording_instance)
-    teleop_interface.add_callback("N", reset_task_success)
-    teleop_interface.display_controls()
     rate_limiter = RateLimiter(args_cli.step_hz)
 
     # reset environment
@@ -337,7 +449,29 @@ def main():  # noqa: C901
             with torch.inference_mode():
                 if env.cfg.dynamic_reset_gripper_effort_limit:
                     dynamic_reset_gripper_effort_limit_sim(env, args_cli.teleop_device)
-                actions = teleop_interface.advance()
+                if args_cli.teleop_device == "handtracking" and not hand_tracking_is_ready():
+                    if not hand_tracking_waiting_reported:
+                        print(
+                            "Waiting for Quest 3 hand joints (wrist, thumb_tip, index_tip). "
+                            "Put both controllers down or turn them off, then show "
+                            f"{'both hands' if is_openarm_bimanual else 'your right hand'} to the headset."
+                        )
+                        hand_tracking_waiting_reported = True
+                    hand_tracking_primed = False
+                    actions = None
+                elif args_cli.teleop_device == "handtracking" and not hand_tracking_primed:
+                    # Discard one valid frame after an input-profile change so the
+                    # retargeters learn the current hand pose without a jump.
+                    teleop_interface.reset()
+                    teleop_interface.advance()
+                    hand_tracking_primed = True
+                    hand_tracking_waiting_reported = False
+                    print("Quest 3 hand joints detected; captured a zero-motion baseline.")
+                    actions = None
+                else:
+                    actions = teleop_interface.advance()
+                if isinstance(actions, torch.Tensor) and actions.ndim == 1:
+                    actions = actions.repeat(env.num_envs, 1)
                 if should_reset_task_success:
                     print("Task Success!!!")
                     should_reset_task_success = False
@@ -371,7 +505,7 @@ def main():  # noqa: C901
                         print(f"All {args_cli.num_demos} demonstrations recorded. Exiting the app.")
                         break
 
-                elif actions is None:
+                elif not teleoperation_active or actions is None:
                     env.render()
                 # apply actions
                 else:

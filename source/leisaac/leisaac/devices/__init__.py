@@ -7,6 +7,7 @@ if TYPE_CHECKING:
     from .keyboard import SO101Keyboard
     from .lekiwi import LeKiwiGamepad, LeKiwiKeyboard, LeKiwiLeader
     from .lerobot import BiSO101Leader, SO101Leader, SO101LeaderRemote
+    from .quest3_controller import Quest3Controller
 
 __all__ = [
     "DeviceBase",
@@ -18,6 +19,7 @@ __all__ = [
     "BiSO101Leader",
     "SO101Leader",
     "SO101LeaderRemote",
+    "Quest3Controller",
 ]
 
 _LAZY_IMPORTS = {
@@ -30,6 +32,7 @@ _LAZY_IMPORTS = {
     "BiSO101Leader": (".lerobot", "BiSO101Leader"),
     "SO101Leader": (".lerobot", "SO101Leader"),
     "SO101LeaderRemote": (".lerobot", "SO101LeaderRemote"),
+    "Quest3Controller": (".quest3_controller", "Quest3Controller"),
 }
 
 
