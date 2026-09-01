@@ -83,7 +83,7 @@ parser.add_argument(
 parser.add_argument(
     "--openarm_bimanual_elbow",
     type=float,
-    default=1.0,
+    default=0.0,
     help="Initial joint4 angle in radians for both OpenArm bimanual arms.",
 )
 parser.add_argument(

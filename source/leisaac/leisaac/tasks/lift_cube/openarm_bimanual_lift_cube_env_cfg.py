@@ -4,6 +4,7 @@ from dataclasses import MISSING
 
 from isaaclab.assets import ArticulationCfg
 from isaaclab.devices.device_base import DevicesCfg
+from isaaclab.devices.openxr import XrCfg
 from isaaclab.devices.openxr.openxr_device import OpenXRDevice, OpenXRDeviceCfg
 from isaaclab.devices.openxr.retargeters.manipulator.gripper_retargeter import GripperRetargeterCfg
 from isaaclab.devices.openxr.retargeters.manipulator.se3_rel_retargeter import Se3RelRetargeterCfg
@@ -50,9 +51,9 @@ class OpenArmBimanualLiftCubeSceneCfg(LiftCubeSceneCfg):
                 rot=(1.0, 0.0, 0.0, 0.0),
                 joint_pos={
                     "openarm_left_joint[1-35-7]": 0.0,
-                    "openarm_left_joint4": 1.0,
+                    "openarm_left_joint4": 0.0,
                     "openarm_right_joint[1-35-7]": 0.0,
-                    "openarm_right_joint4": 1.0,
+                    "openarm_right_joint4": 0.0,
                     OPENARM_BIMANUAL_GRIPPER_JOINT_PATTERNS["left"]: OPENARM_GRIPPER_OPEN_POSITION,
                     OPENARM_BIMANUAL_GRIPPER_JOINT_PATTERNS["right"]: OPENARM_GRIPPER_OPEN_POSITION,
                 },
@@ -99,6 +100,11 @@ class OpenArmBimanualLiftCubeEnvCfg(LiftCubeEnvCfg):
     terminations: OpenArmBimanualTerminationsCfg = OpenArmBimanualTerminationsCfg()
     robot_name: str = "openarm_bimanual_v1_0"
     dynamic_reset_gripper_effort_limit: bool = False
+    # Rotate the whole simulation 90 degrees right in XR so the table faces the viewer.
+    xr: XrCfg = XrCfg(
+        anchor_pos=(0.0, 0.0, 0.0),
+        anchor_rot=(0.70710678, 0.0, 0.0, -0.70710678),
+    )
 
     def __post_init__(self) -> None:
         super().__post_init__()
