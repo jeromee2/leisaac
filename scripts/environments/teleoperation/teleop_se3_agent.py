@@ -63,6 +63,30 @@ parser.add_argument("--task", type=str, default=None, help="Name of the task.")
 parser.add_argument("--seed", type=int, default=None, help="Seed for the environment.")
 parser.add_argument("--sensitivity", type=float, default=1.0, help="Sensitivity factor.")
 parser.add_argument(
+    "--openarm_bimanual_pos_scale",
+    type=float,
+    default=20.0,
+    help="Quest position scale for the OpenArm bimanual task.",
+)
+parser.add_argument(
+    "--openarm_bimanual_rot_scale",
+    type=float,
+    default=10.0,
+    help="Quest rotation scale for the OpenArm bimanual task.",
+)
+parser.add_argument(
+    "--openarm_bimanual_rot_deadzone",
+    type=float,
+    default=0.001,
+    help="Quest rotation deadzone in radians for the OpenArm bimanual task.",
+)
+parser.add_argument(
+    "--openarm_bimanual_elbow",
+    type=float,
+    default=1.0,
+    help="Initial joint4 angle in radians for both OpenArm bimanual arms.",
+)
+parser.add_argument(
     "--xr_start_paused",
     action="store_true",
     help="Start XR teleoperation paused until a START command or the Quest 3 Left X button resumes it.",
@@ -172,6 +196,11 @@ def main():  # noqa: C901
     env_cfg.seed = args_cli.seed if args_cli.seed is not None else int(time.time())
     task_name = args_cli.task
     is_openarm_bimanual = getattr(env_cfg, "robot_name", "").startswith("openarm_bimanual")
+    if is_openarm_bimanual:
+        if not 0.0 <= args_cli.openarm_bimanual_elbow <= 2.443461:
+            raise ValueError("--openarm_bimanual_elbow must be in [0.0, 2.443461] radians")
+        env_cfg.scene.robot.init_state.joint_pos["openarm_left_joint4"] = args_cli.openarm_bimanual_elbow
+        env_cfg.scene.robot.init_state.joint_pos["openarm_right_joint4"] = args_cli.openarm_bimanual_elbow
 
     if args_cli.xr:
         env_cfg = remove_camera_configs(env_cfg)
@@ -327,9 +356,9 @@ def main():  # noqa: C901
             callbacks=teleop_callbacks,
             xr_cfg=env_cfg.xr,
             sensitivity=args_cli.sensitivity,
-            delta_pos_scale_factor=20.0 if is_openarm_bimanual else 4.0,
-            delta_rot_scale_factor=10.0 if is_openarm_bimanual else 2.0,
-            rotation_threshold=0.001 if is_openarm_bimanual else 0.01,
+            delta_pos_scale_factor=args_cli.openarm_bimanual_pos_scale if is_openarm_bimanual else 4.0,
+            delta_rot_scale_factor=args_cli.openarm_bimanual_rot_scale if is_openarm_bimanual else 2.0,
+            rotation_threshold=args_cli.openarm_bimanual_rot_deadzone if is_openarm_bimanual else 0.01,
             zero_out_xy_rotation=not getattr(env_cfg, "robot_name", "").startswith("openarm"),
             start_active=teleoperation_active,
             bimanual=is_openarm_bimanual,
