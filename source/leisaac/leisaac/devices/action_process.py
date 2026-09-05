@@ -3,6 +3,7 @@ from typing import Any
 
 import isaaclab.envs.mdp as mdp
 import torch
+from leisaac.assets.robots.lerobot import SO101_FOLLOWER_USD_JOINT_LIMLITS
 from leisaac.assets.robots.openarm import (
     OPENARM_ARM_JOINT_NAMES,
     OPENARM_BIMANUAL_ARM_JOINT_NAMES,
@@ -13,15 +14,20 @@ from leisaac.assets.robots.openarm import (
     OPENARM_GRIPPER_JOINT_PATTERN,
     OPENARM_GRIPPER_OPEN_POSITION,
 )
-from leisaac.assets.robots.lerobot import SO101_FOLLOWER_USD_JOINT_LIMLITS
+from leisaac.enhance.envs.mdp import PostureDifferentialInverseKinematicsActionCfg
 
 
-def init_action_cfg(action_cfg, device, robot_name: str = "so101_follower"):
+def init_action_cfg(
+    action_cfg,
+    device,
+    robot_name: str = "so101_follower",
+    gripper_open_positions: dict[str, float] | None = None,
+):
     """Populate action terms for a teleoperation device and robot profile.
 
     ``so101_follower`` remains the default for backwards compatibility.  The
     OpenArm profile uses all seven arm joints, its hand link, and the two
-    prismatic finger joints exposed by the Isaac Lab OpenArm USD.
+    finger joints exposed by the configured OpenArm USD.
     """
     if device in ["so101leader", "lekiwi-leader"]:
         action_cfg.arm_action = mdp.JointPositionActionCfg(
@@ -106,46 +112,71 @@ def init_action_cfg(action_cfg, device, robot_name: str = "so101_follower"):
             open_command_expr={"gripper": 1.0},
             close_command_expr={"gripper": 0.4},
         )
+    elif device == "quest3-controller-v2" and robot_name.startswith("openarm_bimanual"):
+        gripper_open_positions = gripper_open_positions or {
+            "left": OPENARM_GRIPPER_OPEN_POSITION,
+            "right": OPENARM_GRIPPER_OPEN_POSITION,
+        }
+        action_cfg.left_arm_action = mdp.JointPositionActionCfg(
+            asset_name="robot",
+            joint_names=list(OPENARM_BIMANUAL_ARM_JOINT_NAMES["left"]),
+            scale=1.0,
+            use_default_offset=False,
+            preserve_order=True,
+        )
+        action_cfg.left_gripper_action = mdp.BinaryJointPositionActionCfg(
+            asset_name="robot",
+            joint_names=[OPENARM_BIMANUAL_GRIPPER_JOINT_PATTERNS["left"]],
+            open_command_expr={OPENARM_BIMANUAL_GRIPPER_JOINT_PATTERNS["left"]: gripper_open_positions["left"]},
+            close_command_expr={OPENARM_BIMANUAL_GRIPPER_JOINT_PATTERNS["left"]: OPENARM_GRIPPER_CLOSED_POSITION},
+        )
+        action_cfg.right_arm_action = mdp.JointPositionActionCfg(
+            asset_name="robot",
+            joint_names=list(OPENARM_BIMANUAL_ARM_JOINT_NAMES["right"]),
+            scale=1.0,
+            use_default_offset=False,
+            preserve_order=True,
+        )
+        action_cfg.right_gripper_action = mdp.BinaryJointPositionActionCfg(
+            asset_name="robot",
+            joint_names=[OPENARM_BIMANUAL_GRIPPER_JOINT_PATTERNS["right"]],
+            open_command_expr={OPENARM_BIMANUAL_GRIPPER_JOINT_PATTERNS["right"]: gripper_open_positions["right"]},
+            close_command_expr={OPENARM_BIMANUAL_GRIPPER_JOINT_PATTERNS["right"]: OPENARM_GRIPPER_CLOSED_POSITION},
+        )
     elif device in ["handtracking", "quest3-controller"] and robot_name.startswith("openarm_bimanual"):
-        action_cfg.left_arm_action = mdp.DifferentialInverseKinematicsActionCfg(
+        action_cfg.left_arm_action = PostureDifferentialInverseKinematicsActionCfg(
             asset_name="robot",
             joint_names=list(OPENARM_BIMANUAL_ARM_JOINT_NAMES["left"]),
             body_name=OPENARM_BIMANUAL_EE_BODY_NAMES["left"],
             controller=mdp.DifferentialIKControllerCfg(
                 command_type="pose",
                 ik_method="dls",
-                use_relative_mode=True,
+                ik_params={"lambda_val": 0.04},
+                use_relative_mode=device != "quest3-controller",
             ),
         )
         action_cfg.left_gripper_action = mdp.BinaryJointPositionActionCfg(
             asset_name="robot",
             joint_names=[OPENARM_BIMANUAL_GRIPPER_JOINT_PATTERNS["left"]],
-            open_command_expr={
-                OPENARM_BIMANUAL_GRIPPER_JOINT_PATTERNS["left"]: OPENARM_GRIPPER_OPEN_POSITION
-            },
-            close_command_expr={
-                OPENARM_BIMANUAL_GRIPPER_JOINT_PATTERNS["left"]: OPENARM_GRIPPER_CLOSED_POSITION
-            },
+            open_command_expr={OPENARM_BIMANUAL_GRIPPER_JOINT_PATTERNS["left"]: OPENARM_GRIPPER_OPEN_POSITION},
+            close_command_expr={OPENARM_BIMANUAL_GRIPPER_JOINT_PATTERNS["left"]: OPENARM_GRIPPER_CLOSED_POSITION},
         )
-        action_cfg.right_arm_action = mdp.DifferentialInverseKinematicsActionCfg(
+        action_cfg.right_arm_action = PostureDifferentialInverseKinematicsActionCfg(
             asset_name="robot",
             joint_names=list(OPENARM_BIMANUAL_ARM_JOINT_NAMES["right"]),
             body_name=OPENARM_BIMANUAL_EE_BODY_NAMES["right"],
             controller=mdp.DifferentialIKControllerCfg(
                 command_type="pose",
                 ik_method="dls",
-                use_relative_mode=True,
+                ik_params={"lambda_val": 0.04},
+                use_relative_mode=device != "quest3-controller",
             ),
         )
         action_cfg.right_gripper_action = mdp.BinaryJointPositionActionCfg(
             asset_name="robot",
             joint_names=[OPENARM_BIMANUAL_GRIPPER_JOINT_PATTERNS["right"]],
-            open_command_expr={
-                OPENARM_BIMANUAL_GRIPPER_JOINT_PATTERNS["right"]: OPENARM_GRIPPER_OPEN_POSITION
-            },
-            close_command_expr={
-                OPENARM_BIMANUAL_GRIPPER_JOINT_PATTERNS["right"]: OPENARM_GRIPPER_CLOSED_POSITION
-            },
+            open_command_expr={OPENARM_BIMANUAL_GRIPPER_JOINT_PATTERNS["right"]: OPENARM_GRIPPER_OPEN_POSITION},
+            close_command_expr={OPENARM_BIMANUAL_GRIPPER_JOINT_PATTERNS["right"]: OPENARM_GRIPPER_CLOSED_POSITION},
         )
     elif device in ["handtracking", "quest3-controller"] and robot_name.startswith("openarm"):
         action_cfg.arm_action = mdp.DifferentialInverseKinematicsActionCfg(

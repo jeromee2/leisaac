@@ -1,11 +1,12 @@
 # Copyright (c) 2026, LeIsaac Project Developers.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Quest 3 Touch Plus controller interface for relative SE(3) teleoperation."""
+"""Quest 3 Touch Plus controller interface for SE(3) teleoperation."""
 
 from __future__ import annotations
 
 import contextlib
+import time
 from collections.abc import Callable
 from typing import Any
 
@@ -14,7 +15,7 @@ import numpy as np
 import torch
 from isaaclab.devices.openxr import XrCfg
 from isaacsim.core.prims import SingleXFormPrim
-from scipy.spatial.transform import Rotation
+from scipy.spatial.transform import Rotation, Slerp
 
 from .device_base import DeviceBase
 
@@ -23,6 +24,84 @@ XRCore = None
 XRPoseValidityFlags = None
 with contextlib.suppress(ModuleNotFoundError):
     from omni.kit.xr.core import XRCore, XRPoseValidityFlags
+
+
+def _rotation_from_wxyz(quaternion: np.ndarray) -> Rotation:
+    """Create a SciPy rotation from an Isaac-style wxyz quaternion."""
+    return Rotation.from_quat([quaternion[1], quaternion[2], quaternion[3], quaternion[0]])
+
+
+def _rotation_to_wxyz(rotation: Rotation) -> np.ndarray:
+    """Return a SciPy rotation as an Isaac-style wxyz quaternion."""
+    x, y, z, w = rotation.as_quat()
+    return np.asarray([w, x, y, z], dtype=np.float32)
+
+
+def _limit_scale(step: float, maximum: float) -> float:
+    if step <= 0.0:
+        return 1.0
+    if maximum <= 0.0:
+        return 0.0
+    return min(1.0, maximum / step)
+
+
+class _OneEuroPoseSmoother:
+    """Dora's adaptive absolute-pose filter, using ``xyz + wxyz`` poses."""
+
+    def __init__(
+        self,
+        min_cutoff: float = 2.0,
+        beta: float = 0.04,
+        d_cutoff: float = 1.5,
+        max_linear_speed: float = 1.0,
+        max_angular_speed: float = 6.0,
+    ):
+        self.min_cutoff = min_cutoff
+        self.beta = beta
+        self.d_cutoff = d_cutoff
+        self.max_linear_speed = max_linear_speed
+        self.max_angular_speed = max_angular_speed
+        self.reset()
+
+    def reset(self):
+        self.position = None
+        self.quaternion = None
+        self.velocity = np.zeros(3, dtype=np.float32)
+        self.time = None
+
+    def smooth(self, timestamp: float, target: np.ndarray) -> np.ndarray:
+        if self.time is None:
+            self.position = target[:3].copy()
+            self.quaternion = target[3:].copy()
+            self.time = timestamp
+            return target.copy()
+
+        dt = timestamp - self.time
+        if dt <= 0.0:
+            return target.copy()
+
+        def alpha(cutoff: float) -> float:
+            return 1.0 / (1.0 + 1.0 / (2.0 * np.pi * cutoff * dt))
+
+        velocity = (target[:3] - self.position) / dt
+        alpha_d = alpha(self.d_cutoff)
+        self.velocity = alpha_d * velocity + (1.0 - alpha_d) * self.velocity
+        alpha_pose = alpha(self.min_cutoff + self.beta * np.linalg.norm(self.velocity))
+        position_step = alpha_pose * (target[:3] - self.position)
+        position_step *= _limit_scale(np.linalg.norm(position_step), self.max_linear_speed * dt)
+        self.position += position_step
+
+        current_rotation = _rotation_from_wxyz(self.quaternion)
+        target_rotation = _rotation_from_wxyz(target[3:])
+        angle = (target_rotation * current_rotation.inv()).magnitude()
+        rotation_alpha = alpha_pose * _limit_scale(
+            alpha_pose * angle,
+            self.max_angular_speed * dt,
+        )
+        rotations = Rotation.from_quat([current_rotation.as_quat(), target_rotation.as_quat()])
+        self.quaternion = _rotation_to_wxyz(Slerp([0.0, 1.0], rotations)([rotation_alpha])[0])
+        self.time = timestamp
+        return np.asarray([*self.position, *self.quaternion], dtype=np.float32)
 
 
 class Quest3Controller(DeviceBase):
@@ -57,6 +136,10 @@ class Quest3Controller(DeviceBase):
         zero_out_xy_rotation: bool = True,
         start_active: bool = True,
         bimanual: bool = False,
+        initial_target_poses: dict[str, np.ndarray] | None = None,
+        neck_pivot_offset: tuple[float, float, float] = (0.0, -0.075, 0.080),
+        max_linear_speed: float = 1.0,
+        max_angular_speed: float = 6.0,
     ):
         """Create the controller interface.
 
@@ -77,7 +160,11 @@ class Quest3Controller(DeviceBase):
             gripper_open_threshold: Right trigger value below which to open the gripper.
             zero_out_xy_rotation: Keep only the yaw component for the SO-101's 5-DoF arm.
             start_active: Whether commands are enabled immediately. When false, use Left X or a START command.
-            bimanual: Emit left and right 7D commands as one 14D action.
+            bimanual: Emit commands for both OpenArm arms.
+            initial_target_poses: Optional ``left`` and ``right`` absolute EE poses as ``xyz + wxyz``.
+            neck_pivot_offset: HMD-local eyes-to-neck offset used to remove head-turn translation.
+            max_linear_speed: Maximum filtered absolute-target translation speed in meters per second.
+            max_angular_speed: Maximum filtered absolute-target rotation speed in radians per second.
         """
         if XRCore is None or XRPoseValidityFlags is None:
             raise RuntimeError(
@@ -91,6 +178,10 @@ class Quest3Controller(DeviceBase):
             raise ValueError("clutch_release_threshold must be less than or equal to clutch_engage_threshold")
         if gripper_open_threshold > gripper_close_threshold:
             raise ValueError("gripper_open_threshold must be less than or equal to gripper_close_threshold")
+        if not np.isfinite(max_linear_speed) or max_linear_speed < 0.0:
+            raise ValueError("max_linear_speed must be finite and non-negative")
+        if not np.isfinite(max_angular_speed) or max_angular_speed < 0.0:
+            raise ValueError("max_angular_speed must be finite and non-negative")
 
         self._sim_device = sim_device
         self._additional_callbacks = dict(callbacks or {})
@@ -108,6 +199,16 @@ class Quest3Controller(DeviceBase):
         self._gripper_open_threshold = gripper_open_threshold
         self._zero_out_xy_rotation = zero_out_xy_rotation
         self._bimanual = bimanual
+        self._neck_pivot_offset = np.asarray(neck_pivot_offset, dtype=np.float32)
+        self._initial_target_poses = {}
+        for side, pose in (initial_target_poses or {}).items():
+            pose = np.asarray(pose, dtype=np.float32)
+            if side not in {"left", "right"} or pose.shape != (7,):
+                raise ValueError("initial_target_poses must contain left/right xyz+wxyz poses")
+            self._initial_target_poses[side] = pose.copy()
+        self._absolute_mode = bool(self._initial_target_poses)
+        if self._absolute_mode and set(self._initial_target_poses) != {"left", "right"}:
+            raise ValueError("absolute bimanual control requires both left and right target poses")
 
         self._xr_core = XRCore.get_singleton()
         self._vc_subscription = self._xr_core.get_message_bus().create_subscription_to_pop_by_type(
@@ -116,16 +217,22 @@ class Quest3Controller(DeviceBase):
         self._configure_xr_anchor()
 
         self._teleoperation_active = start_active
-        self._hand_states = {
-            hand_path: {
+        self._hand_states = {}
+        for hand_path in (self.LEFT_HAND_PATH, self.RIGHT_HAND_PATH):
+            side = hand_path.rsplit("/", 1)[-1]
+            initial_target = self._initial_target_poses.get(side)
+            self._hand_states[hand_path] = {
                 "previous_pose": None,
-                "smoothed_delta_pos": np.zeros(3, dtype=np.float32),
-                "smoothed_delta_rot": np.zeros(3, dtype=np.float32),
                 "clutch_active": False,
                 "gripper_closed": False,
+                "controller_origin": None,
+                "target_origin": None,
+                "target_pose": None if initial_target is None else initial_target.copy(),
+                "smoother": _OneEuroPoseSmoother(
+                    max_linear_speed=max_linear_speed,
+                    max_angular_speed=max_angular_speed,
+                ),
             }
-            for hand_path in (self.LEFT_HAND_PATH, self.RIGHT_HAND_PATH)
-        }
         self._left_x_pressed = False
         self._left_y_pressed = False
 
@@ -145,12 +252,13 @@ class Quest3Controller(DeviceBase):
 
     def reset(self):
         """Clear pose, smoothing, and button-edge state without changing teleop state."""
-        for state in self._hand_states.values():
-            state["previous_pose"] = None
-            state["smoothed_delta_pos"].fill(0.0)
-            state["smoothed_delta_rot"].fill(0.0)
+        for hand_path, state in self._hand_states.items():
+            self._clear_motion_state(state)
             state["clutch_active"] = False
             state["gripper_closed"] = False
+            side = hand_path.rsplit("/", 1)[-1]
+            initial_target = self._initial_target_poses.get(side)
+            state["target_pose"] = None if initial_target is None else initial_target.copy()
         self._left_x_pressed = False
         self._left_y_pressed = False
 
@@ -179,35 +287,34 @@ class Quest3Controller(DeviceBase):
         left_controller = self._xr_core.get_input_device(self.LEFT_HAND_PATH)
         self._handle_button_edges(left_controller)
 
+        head_pose = self._get_head_pose() if self._absolute_mode else None
         if self._bimanual:
-            left_action = self._advance_controller(left_controller, self.LEFT_HAND_PATH)
-            right_action = self._advance_controller(right_controller, self.RIGHT_HAND_PATH)
+            left_action = self._advance_controller(left_controller, self.LEFT_HAND_PATH, head_pose)
+            right_action = self._advance_controller(right_controller, self.RIGHT_HAND_PATH, head_pose)
             return torch.cat((left_action, right_action), dim=0)
-        return self._advance_controller(right_controller, self.RIGHT_HAND_PATH)
+        return self._advance_controller(right_controller, self.RIGHT_HAND_PATH, head_pose)
 
-    def _advance_controller(self, controller: Any, hand_path: str) -> torch.Tensor:
+    def _advance_controller(
+        self, controller: Any, hand_path: str, head_pose: np.ndarray | None
+    ) -> torch.Tensor:
         """Advance one controller and return its 7D arm/gripper command."""
         state = self._hand_states[hand_path]
         trigger_value = self._get_input_value(controller, "trigger", "value")
         self._update_gripper_state(trigger_value, state)
 
         pose = self._get_grip_pose(controller)
+        if self._absolute_mode:
+            return self._advance_absolute_controller(controller, pose, head_pose, state)
         if pose is None:
-            state["previous_pose"] = None
             self._clear_motion_state(state)
             return self._make_action(np.zeros(6, dtype=np.float32), state)
 
-        # Always update the baseline while paused.  Starting or engaging the
-        # clutch then produces a zero command instead of a pose jump.
         if state["previous_pose"] is None:
             state["previous_pose"] = pose
             return self._make_action(np.zeros(6, dtype=np.float32), state)
 
-        delta_pose = self._calculate_delta_pose(pose, state["previous_pose"])
-        state["previous_pose"] = pose
-
         if not self._teleoperation_active:
-            self._clear_motion_state(state)
+            state["previous_pose"] = pose
             return self._make_action(np.zeros(6, dtype=np.float32), state)
 
         clutch_engaged = self._is_clutch_engaged(
@@ -215,14 +322,82 @@ class Quest3Controller(DeviceBase):
         )
         if not clutch_engaged:
             state["clutch_active"] = False
-            self._clear_motion_state(state)
+            state["previous_pose"] = pose
             return self._make_action(np.zeros(6, dtype=np.float32), state)
         if not state["clutch_active"]:
             state["clutch_active"] = True
-            self._clear_motion_state(state)
+            state["previous_pose"] = pose
             return self._make_action(np.zeros(6, dtype=np.float32), state)
 
-        return self._make_action(self._filter_and_scale_delta(delta_pose, state), state)
+        filtered_pose = self._interpolate_pose(pose, state["previous_pose"], self._alpha_pos, self._alpha_rot)
+        delta_pose = self._calculate_delta_pose(filtered_pose, state["previous_pose"])
+        state["previous_pose"] = filtered_pose
+        return self._make_action(self._scale_delta(delta_pose), state)
+
+    def _advance_absolute_controller(
+        self, controller: Any, pose: np.ndarray | None, head_pose: np.ndarray | None, state: dict[str, Any]
+    ) -> torch.Tensor:
+        """Track an HMD-relative controller pose as one non-accumulating absolute IK target."""
+        if pose is None or head_pose is None or not self._teleoperation_active:
+            state["clutch_active"] = False
+            self._clear_motion_state(state)
+            return self._make_action(state["target_pose"], state)
+
+        relative_pose = self._relative_to_head(pose, head_pose, self._neck_pivot_offset)
+        clutch_engaged = self._is_clutch_engaged(
+            self._get_input_value(controller, "squeeze", "value"), state
+        )
+        if not clutch_engaged:
+            state["clutch_active"] = False
+            self._clear_motion_state(state)
+            return self._make_action(state["target_pose"], state)
+        if not state["clutch_active"]:
+            state["clutch_active"] = True
+            state["controller_origin"] = relative_pose
+            state["target_origin"] = state["target_pose"].copy()
+            state["smoother"].reset()
+            state["smoother"].smooth(time.perf_counter(), state["target_pose"])
+            return self._make_action(state["target_pose"], state)
+
+        target = self._compose_absolute_target(
+            relative_pose,
+            state["controller_origin"],
+            state["target_origin"],
+            self._delta_pos_scale_factor,
+            self._delta_rot_scale_factor,
+        )
+        target = state["smoother"].smooth(time.perf_counter(), target)
+        previous_target = state["target_pose"]
+        if np.linalg.norm(target[:3] - previous_target[:3]) < self._position_threshold:
+            target[:3] = previous_target[:3]
+        rotation_error = (
+            _rotation_from_wxyz(target[3:]) * _rotation_from_wxyz(previous_target[3:]).inv()
+        ).magnitude()
+        if rotation_error < self._rotation_threshold:
+            target[3:] = previous_target[3:]
+        state["target_pose"] = target
+        return self._make_action(state["target_pose"], state)
+
+    @staticmethod
+    def _relative_to_head(
+        controller_pose: np.ndarray, head_pose: np.ndarray, neck_pivot_offset: np.ndarray
+    ) -> np.ndarray:
+        head_rotation = _rotation_from_wxyz(head_pose[3:7])
+        pivot = head_pose[:3] + head_rotation.apply(neck_pivot_offset)
+        relative = controller_pose.copy()
+        relative[:3] -= pivot
+        return relative
+
+    @staticmethod
+    def _compose_absolute_target(
+        pose: np.ndarray, origin: np.ndarray, target_origin: np.ndarray, position_gain: float, rotation_gain: float
+    ) -> np.ndarray:
+        position = target_origin[:3] + position_gain * (pose[:3] - origin[:3])
+        rotation = _rotation_from_wxyz(pose[3:7])
+        origin_rotation = _rotation_from_wxyz(origin[3:7])
+        delta = Rotation.from_rotvec(rotation_gain * (rotation * origin_rotation.inv()).as_rotvec())
+        target_rotation = delta * _rotation_from_wxyz(target_origin[3:7])
+        return np.asarray([*position, *_rotation_to_wxyz(target_rotation)], dtype=np.float32)
 
     def _configure_xr_anchor(self):
         """Match the anchor setup used by Isaac Lab's native OpenXR device."""
@@ -311,6 +486,20 @@ class Quest3Controller(DeviceBase):
             dtype=np.float32,
         )
 
+    def _get_head_pose(self) -> np.ndarray | None:
+        """Read the HMD pose as ``xyz + wxyz`` in the same virtual-world frame as the controllers."""
+        try:
+            head = self._xr_core.get_input_device("/user/head")
+            pose = head.get_virtual_world_pose("")
+            position = pose.ExtractTranslation()
+            rotation = pose.ExtractRotationQuat()
+            imaginary = rotation.GetImaginary()
+            return np.asarray(
+                [position[0], position[1], position[2], rotation.GetReal(), *imaginary], dtype=np.float32
+            )
+        except Exception:
+            return None
+
     @staticmethod
     def _get_input_value(input_device: Any, input_name: str, gesture_name: str) -> float:
         """Return an OpenXR input value, or zero if it is unavailable."""
@@ -327,35 +516,38 @@ class Quest3Controller(DeviceBase):
     def _calculate_delta_pose(current_pose: np.ndarray, previous_pose: np.ndarray) -> np.ndarray:
         """Calculate ``[dx, dy, dz, rx, ry, rz]`` from two world-space poses."""
         delta_pos = current_pose[:3] - previous_pose[:3]
-        current_rot = Rotation.from_quat([*current_pose[4:7], current_pose[3]])
-        previous_rot = Rotation.from_quat([*previous_pose[4:7], previous_pose[3]])
+        current_rot = _rotation_from_wxyz(current_pose[3:7])
+        previous_rot = _rotation_from_wxyz(previous_pose[3:7])
         delta_rot = (current_rot * previous_rot.inv()).as_rotvec()
         return np.concatenate([delta_pos, delta_rot]).astype(np.float32)
 
-    def _filter_and_scale_delta(self, delta_pose: np.ndarray, state: dict[str, Any]) -> np.ndarray:
-        position = delta_pose[:3]
-        rotation = delta_pose[3:].copy()
+    @staticmethod
+    def _interpolate_pose(
+        current_pose: np.ndarray, previous_pose: np.ndarray, alpha_pos: float, alpha_rot: float
+    ) -> np.ndarray:
+        """Interpolate absolute position and quaternion before deriving a motion delta."""
+        position = alpha_pos * current_pose[:3] + (1.0 - alpha_pos) * previous_pose[:3]
+        rotations = Rotation.from_quat(
+            [
+                _rotation_from_wxyz(previous_pose[3:7]).as_quat(),
+                _rotation_from_wxyz(current_pose[3:7]).as_quat(),
+            ]
+        )
+        quaternion = _rotation_to_wxyz(Slerp([0.0, 1.0], rotations)([alpha_rot])[0])
+        return np.asarray([*position, *quaternion], dtype=np.float32)
+
+    def _scale_delta(self, delta_pose: np.ndarray) -> np.ndarray:
+        delta_pose = delta_pose.copy()
+        rotation = delta_pose[3:]
         if self._zero_out_xy_rotation:
             rotation[:2] = 0.0
-
-        state["smoothed_delta_pos"] = (
-            self._alpha_pos * position + (1.0 - self._alpha_pos) * state["smoothed_delta_pos"]
-        )
-        if np.linalg.norm(state["smoothed_delta_pos"]) < self._position_threshold:
-            state["smoothed_delta_pos"].fill(0.0)
-
-        state["smoothed_delta_rot"] = (
-            self._alpha_rot * rotation + (1.0 - self._alpha_rot) * state["smoothed_delta_rot"]
-        )
-        if np.linalg.norm(state["smoothed_delta_rot"]) < self._rotation_threshold:
-            state["smoothed_delta_rot"].fill(0.0)
-
-        return np.concatenate(
-            [
-                state["smoothed_delta_pos"] * self._delta_pos_scale_factor,
-                state["smoothed_delta_rot"] * self._delta_rot_scale_factor,
-            ]
-        ).astype(np.float32)
+        if np.linalg.norm(delta_pose[:3]) < self._position_threshold:
+            delta_pose[:3] = 0.0
+        if np.linalg.norm(rotation) < self._rotation_threshold:
+            rotation.fill(0.0)
+        delta_pose[:3] *= self._delta_pos_scale_factor
+        rotation *= self._delta_rot_scale_factor
+        return delta_pose.astype(np.float32)
 
     def _is_clutch_engaged(self, squeeze_value: float, state: dict[str, Any]) -> bool:
         if state["clutch_active"]:
@@ -370,8 +562,10 @@ class Quest3Controller(DeviceBase):
 
     @staticmethod
     def _clear_motion_state(state: dict[str, Any]):
-        state["smoothed_delta_pos"].fill(0.0)
-        state["smoothed_delta_rot"].fill(0.0)
+        state["previous_pose"] = None
+        state["controller_origin"] = None
+        state["target_origin"] = None
+        state["smoother"].reset()
 
     def _make_action(self, ee_command: np.ndarray, state: dict[str, Any]) -> torch.Tensor:
         gripper_command = -1.0 if state["gripper_closed"] else 1.0

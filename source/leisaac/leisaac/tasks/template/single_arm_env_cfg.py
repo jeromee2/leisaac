@@ -6,8 +6,12 @@ import torch
 from isaaclab.assets import ArticulationCfg, AssetBaseCfg
 from isaaclab.devices.device_base import DevicesCfg
 from isaaclab.devices.openxr.openxr_device import OpenXRDevice, OpenXRDeviceCfg
-from isaaclab.devices.openxr.retargeters.manipulator.gripper_retargeter import GripperRetargeterCfg
-from isaaclab.devices.openxr.retargeters.manipulator.se3_rel_retargeter import Se3RelRetargeterCfg
+from isaaclab.devices.openxr.retargeters.manipulator.gripper_retargeter import (
+    GripperRetargeterCfg,
+)
+from isaaclab.devices.openxr.retargeters.manipulator.se3_rel_retargeter import (
+    Se3RelRetargeterCfg,
+)
 from isaaclab.envs import ManagerBasedRLEnvCfg
 from isaaclab.envs.mdp.recorders.recorders_cfg import (
     ActionStateRecorderManagerCfg as RecordTerm,
@@ -21,8 +25,8 @@ from isaaclab.scene import InteractiveSceneCfg
 from isaaclab.sensors import FrameTransformerCfg, OffsetCfg, TiledCameraCfg
 from isaaclab.utils import configclass
 from isaaclab.utils.datasets.episode_data import EpisodeData
-from leisaac.assets.robots.openarm import OPENARM_FEATURE_JOINT_NAMES
 from leisaac.assets.robots.lerobot import SO101_FOLLOWER_CFG
+from leisaac.assets.robots.openarm import OPENARM_FEATURE_JOINT_NAMES
 from leisaac.devices.action_process import init_action_cfg, preprocess_device_action
 from leisaac.enhance.datasets.lerobot_dataset_handler import LeRobotDatasetCfg
 from leisaac.utils.constant import SINGLE_ARM_JOINT_NAMES
@@ -229,8 +233,20 @@ class SingleArmTaskEnvCfg(ManagerBasedRLEnvCfg):
 
     def use_teleop_device(self, teleop_device) -> None:
         self.task_type = teleop_device
-        self.actions = init_action_cfg(self.actions, device=teleop_device, robot_name=self.robot_name)
-        if teleop_device in ["keyboard", "gamepad", "so101_state_machine", "handtracking", "quest3-controller"]:
+        self.actions = init_action_cfg(
+            self.actions,
+            device=teleop_device,
+            robot_name=self.robot_name,
+            gripper_open_positions=getattr(self, "gripper_open_positions", None),
+        )
+        if self.scene.robot.spawn is not None and teleop_device in [
+            "keyboard",
+            "gamepad",
+            "so101_state_machine",
+            "handtracking",
+            "quest3-controller",
+            "quest3-controller-v2",
+        ]:
             self.scene.robot.spawn.rigid_props.disable_gravity = True
 
     def preprocess_device_action(self, action: dict[str, Any], teleop_device) -> torch.Tensor:

@@ -74,6 +74,12 @@ scripts/environments/teleoperation/.cache/
 # scene assets
 assets/scenes/*
 !assets/scenes/.gitkeep
+# Bundle the portable Physics01 scene; keep generated/cache data ignored.
+!assets/scenes/Collected_physics01/
+assets/scenes/Collected_physics01/**/cache/
+assets/scenes/Collected_physics01/**/.cache/
+assets/scenes/Collected_physics01/**/Cache/
+assets/scenes/Collected_physics01/**/DerivedDataCache/
 assets/robots/*
 !assets/robots/.gitkeep
 

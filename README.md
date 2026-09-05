@@ -1,5 +1,7 @@
 # LeIsaac 🚀
 
+OpenArm Quest 3 Physics01 V2 setup: [OPENARM_QUEST3_SETUP.md](OPENARM_QUEST3_SETUP.md)
+
 https://github.com/user-attachments/assets/763acf27-d9a9-4163-8651-3ba0a6a185d7
 
 This repository provides teleoperation functionality in [IsaacLab](https://isaac-sim.github.io/IsaacLab/main/index.html) using the SO101Leader ([LeRobot](https://github.com/huggingface/lerobot)), including data collection, data conversion, and subsequent policy training.

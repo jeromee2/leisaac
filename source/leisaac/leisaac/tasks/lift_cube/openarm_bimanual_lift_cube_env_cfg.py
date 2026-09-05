@@ -6,13 +6,16 @@ from isaaclab.assets import ArticulationCfg
 from isaaclab.devices.device_base import DevicesCfg
 from isaaclab.devices.openxr import XrCfg
 from isaaclab.devices.openxr.openxr_device import OpenXRDevice, OpenXRDeviceCfg
-from isaaclab.devices.openxr.retargeters.manipulator.gripper_retargeter import GripperRetargeterCfg
-from isaaclab.devices.openxr.retargeters.manipulator.se3_rel_retargeter import Se3RelRetargeterCfg
+from isaaclab.devices.openxr.retargeters.manipulator.gripper_retargeter import (
+    GripperRetargeterCfg,
+)
+from isaaclab.devices.openxr.retargeters.manipulator.se3_rel_retargeter import (
+    Se3RelRetargeterCfg,
+)
 from isaaclab.managers import SceneEntityCfg
 from isaaclab.managers import TerminationTermCfg as DoneTerm
 from isaaclab.sensors import FrameTransformerCfg
 from isaaclab.utils import configclass
-
 from leisaac.assets.robots.openarm import (
     OPENARM_BIMANUAL_BASE_BODY_NAME,
     OPENARM_BIMANUAL_CONTROLLED_JOINT_PATTERNS,
@@ -29,7 +32,7 @@ from .lift_cube_env_cfg import LiftCubeEnvCfg, LiftCubeSceneCfg, TerminationsCfg
 
 @configclass
 class OpenArmBimanualActionsCfg:
-    """Left pose/gripper followed by right pose/gripper (14 values total)."""
+    """Per-device left arm/gripper actions followed by right arm/gripper actions."""
 
     left_arm_action: mdp.ActionTermCfg = MISSING
     left_gripper_action: mdp.ActionTermCfg = MISSING
@@ -51,9 +54,9 @@ class OpenArmBimanualLiftCubeSceneCfg(LiftCubeSceneCfg):
                 rot=(1.0, 0.0, 0.0, 0.0),
                 joint_pos={
                     "openarm_left_joint[1-35-7]": 0.0,
-                    "openarm_left_joint4": 0.0,
+                    "openarm_left_joint4": 1.0,
                     "openarm_right_joint[1-35-7]": 0.0,
-                    "openarm_right_joint4": 0.0,
+                    "openarm_right_joint4": 1.0,
                     OPENARM_BIMANUAL_GRIPPER_JOINT_PATTERNS["left"]: OPENARM_GRIPPER_OPEN_POSITION,
                     OPENARM_BIMANUAL_GRIPPER_JOINT_PATTERNS["right"]: OPENARM_GRIPPER_OPEN_POSITION,
                 },
@@ -171,3 +174,10 @@ class OpenArmBimanualLiftCubeEnvCfg(LiftCubeEnvCfg):
                 ),
             }
         )
+
+    def use_teleop_device(self, teleop_device) -> None:
+        super().use_teleop_device(teleop_device)
+        if teleop_device == "quest3-controller-v2" and self.scene.robot.spawn is not None:
+            # The official bimanual USD reports a false left-arm self-contact at the
+            # neutral pose, producing non-zero joint velocity under a fixed target.
+            self.scene.robot.spawn.articulation_props.enabled_self_collisions = False

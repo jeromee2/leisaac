@@ -38,6 +38,11 @@ zip-safe = false
 
 
 [project.optional-dependencies]
+openarm-vr = [
+    "numpy>=1.26,<2.0",
+    "daqp==0.7.2",
+    "qpsolvers==4.11.0",
+]
 isaaclab = ["isaaclab[isaacsim,all]==2.3.0"]
 gr00t = ["pyzmq>=27.0.0", "pydantic==2.10.6", "msgpack>=1.0.5"]
 remote = ["pyzmq>=27.0.0"]

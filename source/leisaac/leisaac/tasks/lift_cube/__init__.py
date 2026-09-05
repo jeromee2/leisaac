@@ -23,9 +23,16 @@ gym.register(
     entry_point="isaaclab.envs:ManagerBasedRLEnv",
     disable_env_checker=True,
     kwargs={
-        "env_cfg_entry_point": (
-            f"{__name__}.openarm_bimanual_lift_cube_env_cfg:OpenArmBimanualLiftCubeEnvCfg"
-        ),
+        "env_cfg_entry_point": f"{__name__}.openarm_bimanual_lift_cube_env_cfg:OpenArmBimanualLiftCubeEnvCfg",
+    },
+)
+
+gym.register(
+    id="LeIsaac-OpenArm-Bimanual-LiftCube-QuestV2-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": f"{__name__}.openarm_bimanual_lift_cube_env_cfg:OpenArmBimanualLiftCubeEnvCfg",
     },
 )
 
@@ -53,5 +60,14 @@ gym.register(
     disable_env_checker=True,
     kwargs={
         "env_cfg_entry_point": f"{__name__}.direct.lift_cube_env:LiftCubeEnvCfg",
+    },
+)
+
+gym.register(
+    id="LeIsaac-OpenArm-Bimanual-Physics01-QuestV2-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": f"{__name__}.openarm_collected_physics01_env_cfg:OpenArmBimanualPhysics01EnvCfg",
     },
 )
