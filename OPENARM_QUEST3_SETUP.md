@@ -4,6 +4,8 @@ This branch contains the robot task, Quest controller mapping, tuned reach and w
 initial pose, the complete Physics01 scene bundle, and headless reachability checks. It does not contain NVIDIA
 binary SDKs or the separately licensed Isaac Teleop web client.
 
+For an AI-assisted installation handoff, see [AI_INSTALL_HANDOFF.md](AI_INSTALL_HANDOFF.md).
+
 ## Known-good baseline
 
 - Ubuntu 24.04

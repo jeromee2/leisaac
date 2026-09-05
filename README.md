@@ -1,6 +1,7 @@
 # LeIsaac 🚀
 
 OpenArm Quest 3 Physics01 V2 setup: [OPENARM_QUEST3_SETUP.md](OPENARM_QUEST3_SETUP.md)
+AI 설치 인수인계: [AI_INSTALL_HANDOFF.md](AI_INSTALL_HANDOFF.md)
 
 https://github.com/user-attachments/assets/763acf27-d9a9-4163-8651-3ba0a6a185d7
 
