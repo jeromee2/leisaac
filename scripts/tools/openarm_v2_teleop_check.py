@@ -13,7 +13,6 @@ parser.add_argument("--settle_steps", type=int, default=120)
 parser.add_argument("--task", default="LeIsaac-OpenArm-Bimanual-Physics01-QuestV2-v0")
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
-args_cli.enable_cameras = True
 
 app_launcher = AppLauncher(vars(args_cli))
 simulation_app = app_launcher.app
@@ -72,6 +71,49 @@ def check_schema(env, robot, joint_ids):
     print("schema: 16D absolute joint action and verified joint limits passed")
 
 
+def check_active_robot_model(robot):
+    """Require one active articulation and no active embedded V2 robot."""
+    import omni.usd
+    from pxr import UsdPhysics
+
+    stage = omni.usd.get_context().get_stage()
+    scene_path = "/World/envs/env_0/Scene"
+    articulation_roots = [
+        str(prim.GetPath())
+        for prim in stage.Traverse()
+        if str(prim.GetPath()).startswith(scene_path)
+        and prim.HasAPI(UsdPhysics.ArticulationRootAPI)
+    ]
+    if len(articulation_roots) != 1:
+        raise AssertionError(
+            f"Expected one active Physics01 articulation, found {articulation_roots}."
+        )
+    robot_name = robot.cfg.prim_path.rsplit("/", 1)[-1]
+    if robot_name == "openarm_v1":
+        embedded_v2 = stage.GetPrimAtPath(f"{scene_path}/openarm_v20")
+        if embedded_v2 and embedded_v2.IsActive():
+            raise AssertionError("Embedded Physics01 V2 robot is still active.")
+    print(f"composition: active articulation={articulation_roots[0]}")
+
+
+def check_physics01_scene_reset(env):
+    if "Physics01" not in args_cli.task:
+        return
+    names = ("spring", "cart", "weight", "weight_01", "weight_02", "weight_03", "bridge", "Table")
+    for name in names:
+        asset = env.scene[name]
+        displaced = asset.data.default_root_state[:, :7].clone()
+        displaced[:, 2] -= 0.2
+        asset.write_root_pose_to_sim(displaced)
+    env.reset()
+    for name in names:
+        asset = env.scene[name]
+        torch.testing.assert_close(
+            asset.data.root_state_w[:, :7], asset.data.default_root_state[:, :7], atol=1e-5, rtol=0.0
+        )
+    print("scene reset: table and seven experiment props restored to authored poses")
+
+
 def check_hold(env, robot, joint_ids):
     initial = read_joints(robot, joint_ids)
     action = pack_action(initial, env.device)
@@ -106,6 +148,37 @@ def check_hold(env, robot, joint_ids):
     )
 
 
+def read_gripper_gaps(robot):
+    """Measure each physical finger gap for either OpenArm model."""
+    if "Physics01" not in args_cli.task:
+        return {}
+    from scipy.spatial.transform import Rotation
+
+    gaps = {}
+    for side in ("left", "right"):
+        def pose(name):
+            index = robot.body_names.index(f"openarm_{side}_{name}")
+            position = robot.data.body_pos_w[0, index].cpu().numpy()
+            quat = robot.data.body_quat_w[0, index].cpu().numpy()
+            return position, Rotation.from_quat(quat[[1, 2, 3, 0]])
+
+        if f"openarm_{side}_hand" in robot.body_names:
+            base_position, base_rotation = pose("hand")
+            points = [
+                base_rotation.inv().apply(pose(name)[0] - base_position)
+                for name in ("left_finger", "right_finger")
+            ]
+        else:
+            base_position, base_rotation = pose("ee_base_link")
+            points = []
+            for index in (1, 2):
+                position, rotation = pose(f"ee_link{index}")
+                tip = position + rotation.apply([0.0, 0.0, -0.09])
+                points.append(base_rotation.inv().apply(tip - base_position))
+        gaps[side] = float(abs(points[0][1] - points[1][1]))
+    return gaps
+
+
 def check_grippers(env, robot, joint_ids):
     arm_commands = read_joints(robot, joint_ids)
     finger_ids = {
@@ -127,9 +200,11 @@ def check_grippers(env, robot, joint_ids):
         }
 
     opened = positions()
+    opened_gaps = read_gripper_gaps(robot)
     for _ in range(120):
         env.step(pack_action(arm_commands, env.device, (-1.0, -1.0)))
     closed = positions()
+    closed_gaps = read_gripper_gaps(robot)
     for side in ("left", "right"):
         close_delta = np.abs(opened[side]) - np.abs(closed[side])
         if np.any(close_delta < np.maximum(0.01, 0.2 * np.abs(opened[side]))):
@@ -140,13 +215,25 @@ def check_grippers(env, robot, joint_ids):
     for _ in range(120):
         env.step(pack_action(arm_commands, env.device))
     reopened = positions()
+    reopened_gaps = read_gripper_gaps(robot)
     for side in ("left", "right"):
         reopen_delta = np.abs(reopened[side]) - np.abs(closed[side])
         if np.any(reopen_delta < np.maximum(0.01, 0.2 * np.abs(opened[side]))):
             raise AssertionError(
                 f"{side} gripper did not reopen: {closed[side]} -> {reopened[side]}"
             )
-    print(f"grippers: close/reopen passed; closed={closed}, reopened={reopened}")
+        if opened_gaps and opened_gaps[side] - closed_gaps[side] < 0.01:
+            raise AssertionError(
+                f"{side} physical finger gap did not close: {opened_gaps[side]} -> {closed_gaps[side]}"
+            )
+        if reopened_gaps and reopened_gaps[side] - closed_gaps[side] < 0.01:
+            raise AssertionError(
+                f"{side} physical finger gap did not reopen: {closed_gaps[side]} -> {reopened_gaps[side]}"
+            )
+    print(
+        f"grippers: close/reopen passed; closed={closed}, reopened={reopened}, "
+        f"gaps={opened_gaps}->{closed_gaps}->{reopened_gaps}"
+    )
 
 
 def check_native_qp_motion(env, robot, joint_ids, body_ids, ee_body_names):
@@ -160,8 +247,10 @@ def check_native_qp_motion(env, robot, joint_ids, body_ids, ee_body_names):
         joint_target_lookahead_s=args_cli.joint_target_lookahead_s,
     )
     targets = {side: solver.fk(side) for side in ("left", "right")}
+    motion_axis = 0
+    motion_distance = -0.05 if "Physics01" in args_cli.task else 0.05
     for target in targets.values():
-        target[0] += 0.05
+        target[motion_axis] += motion_distance
     start_positions = {
         side: robot.data.body_pos_w[0, body_ids[side]].detach().cpu().numpy().copy()
         for side in ("left", "right")
@@ -204,10 +293,11 @@ def check_native_qp_motion(env, robot, joint_ids, body_ids, ee_body_names):
                 max_physical_velocity_ratio,
                 float(np.max(np.abs(physical_velocity) / JOINT_VELOCITY_LIMITS_RAD_S)),
             )
-            displacement_x = float(
-                robot.data.body_pos_w[0, body_ids[side], 0] - start_positions[side][0]
+            displacement = np.sign(motion_distance) * float(
+                robot.data.body_pos_w[0, body_ids[side], motion_axis]
+                - start_positions[side][motion_axis]
             )
-            if displacement_x >= 0.045 and steps_to_90_percent[side] is None:
+            if displacement >= 0.045 and steps_to_90_percent[side] is None:
                 steps_to_90_percent[side] = step_index + 1
         physical_velocities.append(step_velocities)
 
@@ -257,9 +347,81 @@ def check_native_qp_motion(env, robot, joint_ids, body_ids, ee_body_names):
     )
 
 
+def check_physics01_contacts(env, robot, joint_ids, ee_body_names):
+    """Drive into the other arm and torso; require real mesh contact with bounded penetration."""
+    from isaacsim.core.simulation_manager import SimulationManager
+
+    physics = SimulationManager.get_physics_sim_view()
+    root = f"/World/envs/env_0/Scene/{robot.cfg.prim_path.rsplit('/', 1)[-1]}"
+    base_body = "openarm_body_link" if "openarm_body_link" in robot.body_names else "world"
+    views = []
+    for side, other in (("left", "right"), ("right", "left")):
+        filters = [
+            f"{root}/{name}" for name in robot.body_names
+            if name.startswith(f"openarm_{other}_")
+        ] + [f"{root}/{base_body}"]
+        for name in robot.body_names:
+            if name.startswith(f"openarm_{side}_"):
+                views.append(physics.create_rigid_contact_view(
+                    f"{root}/{name}", filter_patterns=filters, max_contact_data_count=2048
+                ))
+
+    for mode in ("cross", "left_torso", "right_torso"):
+        env.reset()
+        collision_posture = {
+            side: np.array([0.0, 0.0, 0.0, 1.6, 0.0, 0.0, 0.0], dtype=np.float32)
+            for side in ("left", "right")
+        }
+        position = robot.data.default_joint_pos.clone()
+        for side in ("left", "right"):
+            position[0, joint_ids[side]] = torch.as_tensor(collision_posture[side], device=env.device)
+        robot.write_joint_state_to_sim(position, torch.zeros_like(position))
+        for _ in range(30):
+            env.step(pack_action(collision_posture, env.device))
+        measured = read_joints(robot, joint_ids)
+        solver = OpenArmIsaacQPControllerV2(
+            robot, measured["left"], measured["right"], ee_body_names=ee_body_names
+        )
+        targets = {side: solver.fk(side) for side in ("left", "right")}
+        if mode == "cross":
+            targets["left"][:3] = [0.35, -0.2, 0.4]
+            targets["right"][:3] = [0.35, 0.2, 0.4]
+        else:
+            targets[mode.split("_")[0]][:3] = [-0.08, 0.0, 0.5]
+        peak_force = np.zeros(2)
+        min_separation = np.zeros(2)
+        for _ in range(300):
+            measured = read_joints(robot, joint_ids)
+            commands = {
+                side: solver.solve(side, targets[side], measured["left"], measured["right"])
+                for side in ("left", "right")
+            }
+            assert all(q is not None and np.all(np.isfinite(q)) for q in commands.values())
+            env.step(pack_action(commands, env.device))
+            for view in views:
+                forces = torch.linalg.vector_norm(
+                    view.get_contact_force_matrix(dt=env.cfg.sim.dt)[0], dim=-1
+                ).cpu().numpy()
+                peak_force = np.maximum(peak_force, [forces[:-1].max(), forces[-1]])
+                _, _, _, distances, counts, starts = view.get_contact_data(dt=env.cfg.sim.dt)
+                for index in range(counts.shape[1]):
+                    group = int(index == counts.shape[1] - 1)
+                    start, count = int(starts[0, index]), int(counts[0, index])
+                    if count:
+                        min_separation[group] = min(
+                            min_separation[group], float(distances[start:start + count].min())
+                        )
+        group = 0 if mode == "cross" else 1
+        assert peak_force[group] > 1.0, f"{mode}: missing physical contact: {peak_force}"
+        assert np.all(min_separation > -0.003), f"{mode}: penetration: {min_separation}"
+        print(f"contacts: {mode}, peak_force={peak_force}N, min_separation={min_separation}m")
+
+
 def main():
     cfg = parse_env_cfg(args_cli.task, device=args_cli.device, num_envs=1)
     cfg.use_teleop_device("quest3-controller-v2")
+    if "Physics01" in args_cli.task:
+        cfg.scene.scene.spawn.activate_contact_sensors = True
     cfg.recorders = None
     cfg.terminations.time_out = None
     if hasattr(cfg.terminations, "success"):
@@ -283,9 +445,16 @@ def main():
     }
     try:
         check_schema(env, robot, joint_ids)
+        check_active_robot_model(robot)
+        check_physics01_scene_reset(env)
         check_hold(env, robot, joint_ids)
         check_grippers(env, robot, joint_ids)
         check_native_qp_motion(env, robot, joint_ids, body_ids, ee_body_names)
+        if (
+            "Physics01" in args_cli.task
+            and cfg.scene.robot.spawn.articulation_props.enabled_self_collisions
+        ):
+            check_physics01_contacts(env, robot, joint_ids, ee_body_names)
         print(f"OpenArm Quest V2 headless integration checks passed: {args_cli.task}")
     except Exception:
         import traceback

@@ -140,15 +140,16 @@ python -u scripts/environments/teleoperation/teleop_se3_agent.py \
 Run these checks before putting on the headset:
 
 ```bash
-python -u scripts/tools/usd_teleop_preflight.py assets/scenes/Collected_physics01/physics01.usd --device cuda:0
+python -u scripts/tools/usd_teleop_preflight.py assets/robots/openarm_v1.0/openarm_bimanual.usd --device cuda:0
 python -u scripts/tools/openarm_v2_teleop_check.py --task LeIsaac-OpenArm-Bimanual-Physics01-QuestV2-v0 --headless --device cuda:0
-python -u scripts/tools/openarm_v2_fk_parity_check.py --headless --device cuda:0
+python -u scripts/tools/openarm_v2_fk_parity_check.py --task LeIsaac-OpenArm-Bimanual-Physics01-QuestV2-v0 --headless --device cuda:0
 ```
-Physics01 is the main V2 scene and its complete bundle is included at
-`assets/scenes/Collected_physics01`. Set `LEISAAC_PHYSICS01_USD_PATH` only when using a relocated compatible bundle. CloudXR and the licensed web client are separate workstation installations.
+Physics01 uses the local OpenArm v1.0 bundle in `assets/robots/openarm_v1.0`.
+The background composition keeps the lab at `assets/scenes/Collected_physics01` and
+deactivates its embedded V2 robot. CloudXR and the licensed web client are separate workstation installations.
 
 
-The collected scene composes and its embedded OpenArm passes the 16D action, fixed-hold, gripper, and bilateral QP
+The collected scene and separately spawned OpenArm v1.0 pass the 16D action, fixed-hold, gripper, and bilateral QP
 motion checks. To run that scene, use the same CloudXR environment above with the Physics01 task:
 
 ```bash
@@ -157,6 +158,43 @@ python -u scripts/environments/teleoperation/teleop_se3_agent.py --task LeIsaac-
 
 Detailed design, results, safety behavior, and remaining headset checks are recorded in
 `OPENARM_VR_TELEOP_V2_PROGRESS.md`.
+
+### Legacy embedded V2 collision and gripper correction (2026-09-07)
+
+Restart the Isaac Sim teleop process with the command above to load these changes;
+resetting an already running process does not reload the Python scene configuration.
+
+- Physics01 now enables native PhysX self-collision on its existing collision meshes.
+  Link-origin distance constraints were insufficient and are not used as collision protection.
+- The scene spawner reverses both frames of finger joint 1, preserving its zero pose.
+  Equal commands now move the two fingers symmetrically instead of tilting together.
+  The redundant finger-2 mimic constraint is removed because both joints are position driven.
+- The revolute grippers use 2 rad/s, 5 Nm, stiffness 100 and damping 10, rather than
+  the official asset's prismatic actuator settings. The symmetric attention reset pose
+  uses joint 1 at left/right `+0.6/-0.6 rad` and joint 4 at `0.4 rad`; all other arm
+  joints start at zero. This keeps the lowered arms clear of the table edge.
+- Physics runs at 120 Hz with 60 Hz control. Tracking loss holds the gripper state.
+
+GPU headless integration passed: reset/open/close/reopen fingertip symmetry within 1 mm,
+tip gaps 0.158695 / 0.036000 / 0.158694 m, stable hold, and bilateral 5 cm motion.
+Physical-contact tests for crossed arms and each arm approaching the torso passed;
+the largest sampled penetration was 0.693 mm (test limit 3 mm).
+These are measured contact scenarios, not a guarantee for every pose or an all-speed
+collision-avoidance planner. Actual Quest trigger behavior and headset motion still need
+verification after restarting. The binary USD itself is unchanged; loading it directly
+without this task's spawner does not apply the gripper repairs.
+
+### OpenArm v1.0 model cutover (2026-09-09)
+
+The default Physics01 task now spawns the pinned Isaac Sim 5.1 OpenArm v1.0 USD at
+`/Scene/openarm_v1`. The original embedded V2 task remains available as
+`LeIsaac-OpenArm-Bimanual-Physics01-V2Legacy-QuestV2-v0`.
+
+The V1 grippers are prismatic and use `0.044 m` for open and `0.0 m` for closed.
+The verified reset posture is `joint1=+0.6/-0.6 rad` and `joint4=0.6 rad`.
+CPU headless validation passed stable hold, close/reopen physical gap, bilateral motion,
+scene reset, joint limits, and six-axis FK/Jacobian parity. Quest headset validation must
+still be performed after restarting the teleop process.
 
 ## 7. V2 arm response-speed tuning (2026-09-04)
 

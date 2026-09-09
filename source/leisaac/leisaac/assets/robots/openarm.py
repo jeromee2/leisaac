@@ -11,7 +11,10 @@ model.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import os
+from functools import lru_cache
 from pathlib import Path
 
 import isaaclab.sim as sim_utils
@@ -63,6 +66,26 @@ OPENARM_BIMANUAL_EE_BODY_NAMES = {
     side: f"openarm_{side}_hand" for side in OPENARM_BIMANUAL_SIDES
 }
 OPENARM_BIMANUAL_BASE_BODY_NAME = "openarm_body_link"
+OPENARM_BIMANUAL_JOINT_LIMITS_RAD = {
+    "left": (
+        (-3.490659, 1.396263),
+        (-3.316126, 0.174533),
+        (-1.570796, 1.570796),
+        (0.0, 2.443461),
+        (-1.570796, 1.570796),
+        (-0.785398, 0.785398),
+        (-1.570796, 1.570796),
+    ),
+    "right": (
+        (-1.396263, 3.490659),
+        (-0.174533, 3.316126),
+        (-1.570796, 1.570796),
+        (0.0, 2.443461),
+        (-1.570796, 1.570796),
+        (-0.785398, 0.785398),
+        (-1.570796, 1.570796),
+    ),
+}
 # Source-of-truth v1.0/v1.1 mechanical limits from Enactic's
 # openarm_description/assets/robot/openarm_v1.0/config/arm/joint_limits.yaml.
 # The generated USD authors the same limits; this table is exposed for smoke
@@ -78,6 +101,34 @@ OPENARM_V10_JOINT_LIMITS_RAD = {
 }
 OPENARM_LOCAL_USD_PATH = Path(ASSETS_ROOT) / "robots" / "openarm_v1.0" / "openarm_unimanual.usd"
 OPENARM_BIMANUAL_LOCAL_USD_PATH = Path(ASSETS_ROOT) / "robots" / "openarm_v1.0" / "openarm_bimanual.usd"
+OPENARM_BIMANUAL_ASSET_MANIFEST_PATH = (
+    OPENARM_BIMANUAL_LOCAL_USD_PATH.parent / "OPENARM_V1_ASSET_MANIFEST.json"
+)
+
+
+@lru_cache(maxsize=1)
+def verify_openarm_bimanual_local_asset() -> None:
+    """Fail before scene creation if the pinned OpenArm v1 bundle changed."""
+
+    if not OPENARM_BIMANUAL_ASSET_MANIFEST_PATH.is_file():
+        raise FileNotFoundError(
+            f"Missing OpenArm v1 manifest: {OPENARM_BIMANUAL_ASSET_MANIFEST_PATH}"
+        )
+    manifest = json.loads(OPENARM_BIMANUAL_ASSET_MANIFEST_PATH.read_text())
+    if manifest.get("schema_version") != 1:
+        raise RuntimeError("Unsupported OpenArm v1 asset manifest schema.")
+    asset_dir = OPENARM_BIMANUAL_ASSET_MANIFEST_PATH.parent
+    files = manifest.get("files")
+    if not files or manifest.get("root_usd") != OPENARM_BIMANUAL_LOCAL_USD_PATH.name:
+        raise RuntimeError("Incomplete OpenArm v1 asset manifest.")
+    for item in files:
+        path = asset_dir / item["path"]
+        if not path.is_file() or path.stat().st_size != item["size"]:
+            raise RuntimeError(f"OpenArm v1 asset file is missing or truncated: {path}")
+        with path.open("rb") as stream:
+            digest = hashlib.file_digest(stream, "sha256").hexdigest()
+        if digest != item["sha256"]:
+            raise RuntimeError(f"OpenArm v1 asset hash mismatch: {path}")
 
 
 def _openarm_usd_path() -> str:
@@ -240,7 +291,11 @@ def get_openarm_unimanual_cfg() -> ArticulationCfg:
     return OPENARM_UNI_HIGH_PD_CFG
 
 
-def get_openarm_bimanual_cfg() -> ArticulationCfg:
+def get_openarm_bimanual_cfg(*, local_only: bool = False) -> ArticulationCfg:
     """Return the official high-PD bimanual OpenArm configuration."""
 
-    return OPENARM_BI_HIGH_PD_CFG
+    cfg = OPENARM_BI_HIGH_PD_CFG.copy()
+    if local_only:
+        verify_openarm_bimanual_local_asset()
+        cfg.spawn.usd_path = str(OPENARM_BIMANUAL_LOCAL_USD_PATH)
+    return cfg

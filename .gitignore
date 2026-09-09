@@ -82,6 +82,7 @@ assets/scenes/Collected_physics01/**/Cache/
 assets/scenes/Collected_physics01/**/DerivedDataCache/
 assets/robots/*
 !assets/robots/.gitkeep
+!assets/robots/openarm_v1.0/
 
 # greenscreen
 greenscreen/*

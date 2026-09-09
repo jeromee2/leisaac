@@ -235,7 +235,7 @@ class Quest3OpenArmTeleopV2:
             actual_limits = self._robot.data.soft_joint_pos_limits[0, self._joint_ids[side]].detach().cpu().numpy()
             if not np.allclose(actual_limits, EXPECTED_JOINT_LIMITS_RAD[side], atol=1e-4, rtol=0.0):
                 raise RuntimeError(
-                    f"OpenArm {side} limits do not match the verified V2 schema: {actual_limits.tolist()}."
+                    f"OpenArm {side} limits do not match the verified bimanual schema: {actual_limits.tolist()}."
                 )
 
     def _update_operator_frame(self, head: Any, now_s: float, measured: dict[str, np.ndarray]) -> None:

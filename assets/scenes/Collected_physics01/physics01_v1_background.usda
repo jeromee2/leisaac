@@ -1,0 +1,17 @@
+#usda 1.0
+(
+    defaultPrim = "World"
+    metersPerUnit = 1
+    upAxis = "Z"
+)
+
+def Xform "World" (
+    prepend references = @./physics01.usd@</World>
+)
+{
+    over "openarm_v20" (
+        active = false
+    )
+    {
+    }
+}

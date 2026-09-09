@@ -68,6 +68,24 @@ gym.register(
     entry_point="isaaclab.envs:ManagerBasedRLEnv",
     disable_env_checker=True,
     kwargs={
+        "env_cfg_entry_point": f"{__name__}.openarm_collected_physics01_env_cfg:OpenArmBimanualPhysics01V1EnvCfg",
+    },
+)
+
+gym.register(
+    id="LeIsaac-OpenArm-Bimanual-Physics01-V1-QuestV2-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": f"{__name__}.openarm_collected_physics01_env_cfg:OpenArmBimanualPhysics01V1EnvCfg",
+    },
+)
+
+gym.register(
+    id="LeIsaac-OpenArm-Bimanual-Physics01-V2Legacy-QuestV2-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
         "env_cfg_entry_point": f"{__name__}.openarm_collected_physics01_env_cfg:OpenArmBimanualPhysics01EnvCfg",
     },
 )

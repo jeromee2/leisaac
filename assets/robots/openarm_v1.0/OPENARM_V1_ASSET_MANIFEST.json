@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "robot_model": "openarm_v1.0_bimanual",
+  "source": "https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.1/Isaac/Robots/OpenArm/openarm_bimanual/",
+  "source_release": "Isaac Sim 5.1",
+  "root_usd": "openarm_bimanual.usd",
+  "articulation_root": "/openarm/root_joint",
+  "base_body": "openarm_body_link",
+  "end_effector_bodies": {
+    "left": "openarm_left_hand",
+    "right": "openarm_right_hand"
+  },
+  "arm_joint_names": {
+    "left": ["openarm_left_joint1", "openarm_left_joint2", "openarm_left_joint3", "openarm_left_joint4", "openarm_left_joint5", "openarm_left_joint6", "openarm_left_joint7"],
+    "right": ["openarm_right_joint1", "openarm_right_joint2", "openarm_right_joint3", "openarm_right_joint4", "openarm_right_joint5", "openarm_right_joint6", "openarm_right_joint7"]
+  },
+  "finger_joint_names": {
+    "left": ["openarm_left_finger_joint1", "openarm_left_finger_joint2"],
+    "right": ["openarm_right_finger_joint1", "openarm_right_finger_joint2"]
+  },
+  "finger_joint_type": "PhysicsPrismaticJoint",
+  "commanded_gripper_range_m": [0.0, 0.044],
+  "files": [
+    {"path": "openarm_bimanual.usd", "size": 7121, "sha256": "a5b18e8292d70b7d7767c49137c7f4bc9eea2d697466be7d34bbb335f2b3478e"},
+    {"path": "configuration/openarm_bimanual_base.usd", "size": 89321839, "sha256": "55d129950a453f859f1e795ab06b2c2d810f71e66051ca6d4f57ef0f0e887532"},
+    {"path": "configuration/openarm_bimanual_physics.usd", "size": 8579, "sha256": "33f73a2426e232a514aad09139da527a4c645822a4fd59c851725567377fad94"},
+    {"path": "configuration/openarm_bimanual_sensor.usd", "size": 647, "sha256": "be7bed93ad1d4950223434004ffba28637f3bafaa47a746cafd4fd71ab60a8f0"}
+  ]
+}

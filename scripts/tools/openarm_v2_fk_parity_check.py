@@ -11,9 +11,11 @@ from isaaclab.app import AppLauncher
 
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument("--iterations", type=int, default=60)
+parser.add_argument(
+    "--task", default="LeIsaac-OpenArm-Bimanual-Physics01-QuestV2-v0"
+)
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
-args_cli.enable_cameras = True
 
 app_launcher = AppLauncher(vars(args_cli))
 simulation_app = app_launcher.app
@@ -30,7 +32,6 @@ from leisaac.devices.openarm_vr_v2.core import rotation_from_wxyz, rotation_to_w
 from leisaac.devices.openarm_vr_v2.isaac_qp_controller import OpenArmIsaacQPControllerV2
 
 
-TASK = "LeIsaac-OpenArm-Bimanual-LiftCube-QuestV2-v0"
 SIDES = ("left", "right")
 
 
@@ -86,10 +87,14 @@ def assert_axis(label, vector, axis, minimum, cosine_limit):
     return magnitude, cosine
 
 
-def check_parity(env, robot, joint_ids, body_ids):
+def check_parity(env, robot, joint_ids, body_ids, ee_body_names):
     initial = read_joints(robot, joint_ids)
     solver = OpenArmIsaacQPControllerV2(
-        robot, initial["left"], initial["right"], control_hz=60.0
+        robot,
+        initial["left"],
+        initial["right"],
+        control_hz=60.0,
+        ee_body_names=ee_body_names,
     )
     axis_names = ("x", "y", "z")
     results = []
@@ -130,12 +135,13 @@ def check_parity(env, robot, joint_ids, body_ids):
 
 
 def main():
-    cfg = parse_env_cfg(TASK, device=args_cli.device, num_envs=1)
+    cfg = parse_env_cfg(args_cli.task, device=args_cli.device, num_envs=1)
     cfg.use_teleop_device("quest3-controller-v2")
     cfg.recorders = None
     cfg.terminations.time_out = None
-    cfg.terminations.success = None
-    env = gym.make(TASK, cfg=cfg).unwrapped
+    if hasattr(cfg.terminations, "success"):
+        cfg.terminations.success = None
+    env = gym.make(args_cli.task, cfg=cfg).unwrapped
     env.reset()
     robot = env.scene["robot"]
     joint_ids = {
@@ -147,12 +153,11 @@ def main():
         )
         for side in SIDES
     }
-    body_ids = {
-        side: robot.data.body_names.index(f"openarm_{side}_hand") for side in SIDES
-    }
+    ee_body_names = cfg.openarm_ee_body_names
+    body_ids = {side: robot.data.body_names.index(ee_body_names[side]) for side in SIDES}
     try:
-        check_parity(env, robot, joint_ids, body_ids)
-        print("OpenArm V2 native QP/Isaac 6-DoF frame parity passed.")
+        check_parity(env, robot, joint_ids, body_ids, ee_body_names)
+        print("OpenArm Quest V2 controller/Isaac 6-DoF frame parity passed.")
     except Exception:
         import traceback
 

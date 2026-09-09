@@ -301,7 +301,6 @@ class ClutchedPoseMapper:
     ) -> HandMappingResult:
         """Advance one hand and return a filtered robot-frame target when clutched."""
         robot_pose = validate_pose(robot_pose, name="robot FK pose")
-        self._update_gripper(sample.trigger)
 
         if not enabled:
             self._clear_motion(HandTeleopState.WAITING)
@@ -312,6 +311,7 @@ class ClutchedPoseMapper:
         if not sample.valid or sample.pose is None or now_s - sample.timestamp_s > self.stale_timeout_s:
             self.mark_hold(now_s)
             return self._result(reason="controller tracking invalid or stale")
+        self._update_gripper(sample.trigger)
 
         if self._is_pose_jump(sample.pose, sample.timestamp_s):
             self._remember_pose(sample.pose, sample.timestamp_s)

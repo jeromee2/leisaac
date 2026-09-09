@@ -1,11 +1,11 @@
 # OpenArm Quest 3 teleoperation V2 progress
 
-Last updated: 2026-09-04 (Asia/Seoul)
+Last updated: 2026-09-09 (Asia/Seoul)
 
 ## Outcome
 
 Physics01 is now the main scene and default teleoperation task. The new path is registered as `quest3-controller-v2` and does not replace the legacy
-`quest3-controller` implementation. It drives the official bimanual OpenArm with a 16D
+`quest3-controller` implementation. It now drives the official OpenArm v1.0 bimanual asset with a 16D
 absolute joint action: left arm 7 + left gripper 1 + right arm 7 + right gripper 1.
 
 ## Root causes confirmed
@@ -23,8 +23,8 @@ absolute joint action: left arm 7 + left gripper 1 + right arm 7 + right gripper
   a fixed-target headless test it produced `0.51448 rad/s` combined joint RMS velocity even
   though position changes were only microradians. Disabling self-collision for the V2 task
   alone reduced both initial joint error and settled RMS velocity to `0.00000`.
-- The complete bundle at `assets/scenes/Collected_physics01/physics01.usd` resolves all USD layers. Its
-  embedded OpenArm uses `*_ee_base_link` end effectors and mirrored revolute gripper signs, unlike the official asset.
+- The original Physics01 bundle embeds a V2 OpenArm with `*_ee_base_link` end effectors and mirrored revolute grippers.
+  The active task now deactivates that robot and separately spawns the pinned V1 asset with `*_hand` end effectors and prismatic grippers.
 - Relocation preflight passes the schema and 132 USD dependencies; five cosmetic material-resource warnings remain (Map #1461, OmniGlass.mdl, OmniPBR.mdl, OmniSurfacePresets.mdl, gltf/pbr.mdl).
 
 ## V2 implementation
@@ -42,8 +42,8 @@ absolute joint action: left arm 7 + left gripper 1 + right arm 7 + right gripper
 - Direct absolute joint targets with no default-position offset. Command/measurement
   divergence faults only the affected arm and requires a fresh clutch.
 - Optional JSONL diagnostics via `--openarm_v2_debug_log`.
-- V2-only task registration and V2-only self-collision override; legacy code and task names
-  remain available.
+- The canonical Physics01 task uses OpenArm V1; the embedded V2 remains available through the
+  `LeIsaac-OpenArm-Bimanual-Physics01-V2Legacy-QuestV2-v0` rollback task.
 
 ## Verification completed
 
@@ -69,6 +69,16 @@ Physics01 scene:
   motion: left=0.0499m, right=0.0497m, max_velocity_ratio=1.0000
 frame parity: both arms +X/+Y/+Z = 0.0300m, cos=1.0000;
               both arms +roll/+pitch/+yaw = 0.1200rad, cos=1.0000
+```
+
+OpenArm v1.0 Physics01 cutover check (CPU PhysX, 2026-09-09):
+
+```text
+action/observation: 16D / 18D
+hold RMS: 0.00000 rad/s
+gripper gap: 0.0980 -> 0.0100 -> 0.0980 m
+bilateral 5 cm target: left=0.0466 m, right=0.0466 m
+six-axis parity: translation/rotation cosine >= 0.9998
 ```
 
 Commands:
@@ -120,9 +130,9 @@ Y resets the task.
 
 - Confirm controller forward/left/up and wrist roll/pitch/yaw signs in the Quest headset.
 - Confirm tracking loss and squeeze release/re-engage never jump either arm.
-- Self-collision is disabled only for the V2 task to remove the confirmed false contact.
-  Cross-arm/body collision prevention is therefore not guaranteed; begin at low speed and
-  keep the hands separated until collision geometry is repaired or filtered per link pair.
+- The official LiftCube V2 asset still disables self-collision for its confirmed false contact.
+- The current Physics01 V1 task disables robot self-collision because the official asset has a
+  confirmed false neutral-pose contact. Scene, table, and prop collisions remain enabled.
 - The collected lab asset has one unresolved texture (`Map #1461`); geometry and physics compose, but that material
   may render with a fallback. Isaac's built-in MDL identifiers are also reported as dependency warnings.
 

@@ -12,6 +12,7 @@ import numpy as np
 from leisaac.assets.robots.openarm import (
     OPENARM_BIMANUAL_ARM_JOINT_NAMES,
     OPENARM_BIMANUAL_EE_BODY_NAMES,
+    OPENARM_BIMANUAL_JOINT_LIMITS_RAD,
 )
 from qpsolvers import solve_qp
 
@@ -21,24 +22,7 @@ SIDES = ("left", "right")
 JOINT_VELOCITY_LIMITS_RAD_S = np.asarray([2.0, 2.0, 2.175, 2.175, 2.61, 2.61, 2.61])
 DEFAULT_JOINT_TARGET_LOOKAHEAD_S = 0.08
 EXPECTED_JOINT_LIMITS_RAD = {
-    "left": np.asarray([
-        [-3.490659, 1.396263],
-        [-3.316126, 0.174533],
-        [-1.570796, 1.570796],
-        [0.0, 2.443461],
-        [-1.570796, 1.570796],
-        [-0.785398, 0.785398],
-        [-1.570796, 1.570796],
-    ]),
-    "right": np.asarray([
-        [-1.396263, 3.490659],
-        [-0.174533, 3.316126],
-        [-1.570796, 1.570796],
-        [0.0, 2.443461],
-        [-1.570796, 1.570796],
-        [-0.785398, 0.785398],
-        [-1.570796, 1.570796],
-    ]),
+    side: np.asarray(limits) for side, limits in OPENARM_BIMANUAL_JOINT_LIMITS_RAD.items()
 }
 
 

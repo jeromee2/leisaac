@@ -79,8 +79,20 @@ def main() -> int:
     print(f"  physics scenes: {physics_scenes or 'none'}")
     print(f"  articulation roots: {[str(prim.GetPath()) for prim in articulation_roots] or 'none'}")
     for name in sorted(gripper_joint_prims):
-        joint = UsdPhysics.RevoluteJoint(gripper_joint_prims[name])
-        print(f"  {name} limits [deg]: {joint.GetLowerLimitAttr().Get()}, {joint.GetUpperLimitAttr().Get()}")
+        prim = gripper_joint_prims[name]
+        if prim.IsA(UsdPhysics.PrismaticJoint):
+            joint = UsdPhysics.PrismaticJoint(prim)
+            unit = "m"
+        elif prim.IsA(UsdPhysics.RevoluteJoint):
+            joint = UsdPhysics.RevoluteJoint(prim)
+            unit = "deg"
+        else:
+            print(f"FAIL: unsupported gripper joint type: {prim.GetTypeName()}")
+            return 3
+        print(
+            f"  {name} ({prim.GetTypeName()}) limits [{unit}]: "
+            f"{joint.GetLowerLimitAttr().Get()}, {joint.GetUpperLimitAttr().Get()}"
+        )
     for prim in articulation_roots:
         parent = prim.GetParent()
         print(f"  articulation asset pose: {parent.GetPath()} {get_prim_pos_rot(parent)}")

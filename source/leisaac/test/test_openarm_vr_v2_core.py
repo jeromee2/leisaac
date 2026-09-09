@@ -142,6 +142,26 @@ def test_gripper_hysteresis_does_not_chatter():
     assert not mapper.gripper_closed
 
 
+def test_invalid_tracking_does_not_open_closed_gripper():
+    mapper = ClutchedPoseMapper()
+    operator_frame = OperatorFrame(np.zeros(3), Rotation.identity())
+    mapper.step(
+        sample(1.0, trigger=0.7),
+        now_s=1.0,
+        operator_frame=operator_frame,
+        robot_pose=IDENTITY_POSE,
+        enabled=True,
+    )
+    mapper.step(
+        sample(1.01, None, valid=False, trigger=0.0),
+        now_s=1.01,
+        operator_frame=operator_frame,
+        robot_pose=IDENTITY_POSE,
+        enabled=True,
+    )
+    assert mapper.gripper_closed
+
+
 def test_openxr_trigger_uses_the_strongest_supported_channel():
     class FakeInputDevice:
         values = {("trigger", "value"): 0.0, ("trigger", "force"): 0.8}
